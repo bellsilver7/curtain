@@ -1,4 +1,9 @@
 # 로컬 개발용. 프로덕션 설정 아님.
+#
+# 호스트 포트를 기본값(5432/6379)에서 비켜뒀다. 다른 프로젝트의 DB나 로컬에
+# 설치된 Postgres 와 부딪히면 "port is already allocated" 로 컨테이너가 안 뜨고,
+# 더 나쁜 경우엔 엉뚱한 DB 에 마이그레이션이 올라간다.
+# 컨테이너 내부 포트는 그대로이므로 컨테이너끼리는 5432/6379 로 통신한다.
 services:
   postgres:
     image: postgres:16-alpine
@@ -6,7 +11,7 @@ services:
       POSTGRES_USER: curtain
       POSTGRES_PASSWORD: curtain
       POSTGRES_DB: curtain
-    ports: ["5432:5432"]
+    ports: ["15432:5432"]
     # 동시성 테스트에서 커넥션이 부족하면 원인 파악이 어려워진다. 넉넉하게.
     command: >
       postgres -c max_connections=300
@@ -21,7 +26,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports: ["6379:6379"]
+    ports: ["16379:6379"]
     command: redis-server --appendonly no --save ""
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]

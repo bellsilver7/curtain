@@ -29,7 +29,7 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-DEFAULT_URL = "postgresql+asyncpg://curtain:curtain@localhost:5432/curtain"
+DEFAULT_URL = "postgresql+asyncpg://curtain:curtain@localhost:15432/curtain"
 
 
 def _url() -> str:
