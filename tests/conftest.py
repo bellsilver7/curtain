@@ -13,7 +13,7 @@ import os
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -202,7 +202,7 @@ async def seeded(engine: AsyncEngine, clean_stores: None) -> Seeded:
 
         # 관람일시는 D+21 로 둔다. 취소 수수료 구간에서 "무료" 쪽에 들어가야
         # 취소 테스트가 수수료 계산과 얽히지 않는다.
-        base = datetime.now(timezone.utc) + timedelta(days=21)
+        base = datetime.now(UTC) + timedelta(days=21)
         schedule_ids: list[int] = []
         for offset_h in (0, 24, 29):
             sid: int = (
@@ -214,7 +214,7 @@ async def seeded(engine: AsyncEngine, clean_stores: None) -> Seeded:
                     {
                         "p": performance_id,
                         "s": base + timedelta(hours=offset_h),
-                        "o": datetime.now(timezone.utc) - timedelta(minutes=1),
+                        "o": datetime.now(UTC) - timedelta(minutes=1),
                     },
                 )
             ).scalar_one()

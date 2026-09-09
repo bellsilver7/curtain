@@ -60,6 +60,16 @@ def _ts() -> sa.DateTime:
     return sa.DateTime(timezone=True)
 
 
+def _stamped() -> Mapped[datetime]:
+    """server_default=now() 인 timestamptz 컬럼.
+
+    다섯 테이블에 같은 모양으로 들어간다. 시각을 애플리케이션이 아니라 DB 가
+    찍는 것이 중요하다 — 워커와 API 의 시계가 어긋나면 리컨실러가 "5분 지난
+    주문"을 잘못 고른다.
+    """
+    return mapped_column(_ts(), nullable=False, server_default=sa.func.now())
+
+
 # ---------------------------------------------------------------- 사용자 · 장소
 
 
@@ -69,7 +79,7 @@ class User(Base):
     id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=True)
     email: Mapped[str] = mapped_column(sa.Text, nullable=False, unique=True)
     name: Mapped[str] = mapped_column(sa.Text, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(_ts(), nullable=False, server_default=sa.func.now())
+    created_at: Mapped[datetime] = _stamped()
 
 
 class Venue(Base):
@@ -146,7 +156,7 @@ class Order(Base):
     idempotency_key: Mapped[str] = mapped_column(sa.Text, nullable=False, unique=True)
     #: 중복 요청에 되돌려줄 최초 응답 스냅샷
     response_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(_ts(), nullable=False, server_default=sa.func.now())
+    created_at: Mapped[datetime] = _stamped()
     paid_at: Mapped[datetime | None] = mapped_column(_ts(), nullable=True)
     canceled_at: Mapped[datetime | None] = mapped_column(_ts(), nullable=True)
 
@@ -194,7 +204,7 @@ class ScheduleSeat(Base):
     status: Mapped[str] = mapped_column(SeatStatus, nullable=False, server_default="AVAILABLE")
     held_by: Mapped[int | None] = mapped_column(sa.ForeignKey("users.id"), nullable=True)
     hold_expires_at: Mapped[datetime | None] = mapped_column(_ts(), nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(_ts(), nullable=False, server_default=sa.func.now())
+    updated_at: Mapped[datetime] = _stamped()
 
 
 class OrderItem(Base):
@@ -231,7 +241,7 @@ class Payment(Base):
     #: 취소 시점의 수수료 계산 결과 스냅샷.
     #: 정책이 바뀌어도 과거 취소의 근거는 안 흔들린다 (취소와 환불).
     fee_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
-    requested_at: Mapped[datetime] = mapped_column(_ts(), nullable=False, server_default=sa.func.now())
+    requested_at: Mapped[datetime] = _stamped()
     approved_at: Mapped[datetime | None] = mapped_column(_ts(), nullable=True)
     refunded_at: Mapped[datetime | None] = mapped_column(_ts(), nullable=True)
 
@@ -257,5 +267,5 @@ class Outbox(Base):
     id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=True)
     topic: Mapped[str] = mapped_column(sa.Text, nullable=False)
     payload: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(_ts(), nullable=False, server_default=sa.func.now())
+    created_at: Mapped[datetime] = _stamped()
     published_at: Mapped[datetime | None] = mapped_column(_ts(), nullable=True)

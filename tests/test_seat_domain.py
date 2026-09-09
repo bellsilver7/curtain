@@ -5,7 +5,7 @@ policy.py 의 doctest 를 실제로 실행해서, 설계 문서에 적힌 수수
 """
 
 import doctest
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -65,7 +65,7 @@ def test_payment_window_fits_inside_hold() -> None:
 
 def test_cancel_closed_on_show_day() -> None:
     """좌석 상태 전이 — 관람일 당일 취소 불가."""
-    now = datetime(2026, 9, 30, 10, tzinfo=timezone.utc)
+    now = datetime(2026, 9, 30, 10, tzinfo=UTC)
     with pytest.raises(policy.CancelClosed):
         policy.cancel_fee(100_000, now, now + timedelta(hours=9))
 

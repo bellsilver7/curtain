@@ -5,7 +5,8 @@ DB 도 Redis 도 HTTP 도 모르므로, 규칙 자체는 인프라 없이 테스
 
 이 모듈은 규칙을 *선언*하고, 실제 강제는 두 곳에서 이뤄진다.
 
-  1. SQL 의 조건부 WHERE status = 기대값 (원칙 "모든 상태 전이는 조건부 쓰기") — 동시성 하에서의 실제 방어
+  1. SQL 의 조건부 WHERE status = 기대값 (원칙 "모든 상태 전이는 조건부 쓰기")
+     — 동시성 하에서의 실제 방어
   2. DB 제약 ck_schedule_seats_hold_shape — 어긋난 행 자체를 거부
 
 여기 있는 함수는 그 둘보다 앞단에서 "요청이 애초에 말이 되는가"를 판정하고,
@@ -19,7 +20,10 @@ from enum import StrEnum
 
 
 class SeatStatus(StrEnum):
-    """DB 의 seat_status ENUM 과 1:1. 값을 바꾸면 마이그레이션이 필요하다 (결정 기록: 마이그레이션 전략)."""
+    """DB 의 seat_status ENUM 과 1:1.
+
+    값을 바꾸면 마이그레이션이 필요하다 (결정 기록: 마이그레이션 전략).
+    """
 
     AVAILABLE = "AVAILABLE"
     HELD = "HELD"
