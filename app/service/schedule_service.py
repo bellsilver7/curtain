@@ -1,4 +1,4 @@
-"""공연장 좌석과 회차 재고 전개 — 설계 문서 §3
+"""공연장 좌석과 회차 재고 전개 — 설계 문서: 재고 모델
 
 재고는 "남은 수량"이 아니라 "특정 회차의 특정 좌석"이다. 회차를 열 때
 `schedules × seats` 를 미리 전개해 두면, 이후 모든 경합이 카운터 감산이 아니라
@@ -46,7 +46,7 @@ def _rows(zone: str, labels: str, width: int, grade: str, price: int) -> list[Se
     return [SeatRow(zone, ch, width, grade, price) for ch in labels]
 
 
-#: 설계 문서가 가정하는 1,200석 공연장 (§1 "가정": VIP 120 / R 380 / S 700).
+#: 설계 문서가 가정하는 1,200석 공연장: VIP 120 / R 380 / S 700.
 #: 열 폭이 균일하지 않은 것은 의도적이다 — 실제 공연장이 그렇고, 균일한 격자는
 #: 좌석 번호 계산 버그를 숨긴다.
 DEMO_HALL = VenueLayout(

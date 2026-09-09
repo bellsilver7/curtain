@@ -1,4 +1,4 @@
-"""결제 사가 · 멱등성 — 설계 문서 §7, §10
+"""결제 사가 · 멱등성 — 설계 문서: 결제 사가, 검증 시나리오
 
 FakePG 에 지연과 타임아웃을 주입해서, 보상 경로(⑦–⑨)가 실제로 도는지 확인한다.
 """
@@ -12,7 +12,7 @@ async def test_pg_timeout_but_actually_approved() -> None:
     """FakePG 30초 지연 + 실제로는 승인 → 사용자는 실패 응답.
 
     합격 기준: 리컨실러가 승인을 발견해 **확정**. 최종적으로 좌석 1건, 결제 1건.
-    응답 유실을 실패로 취급하면 돈은 나갔는데 좌석이 없는 사고가 난다 (원칙 04).
+    응답 유실을 실패로 취급하면 돈은 나갔는데 좌석이 없는 사고가 난다 (원칙 "외부 호출은 리컨실러가 받친다").
     """
 
 
@@ -32,8 +32,8 @@ async def test_duplicate_webhook() -> None:
 
 
 async def test_hold_expired_during_approval() -> None:
-    """승인 왕복 중 hold 만료 → 409 HOLD_EXPIRED + 자동 환불 (§4 note)."""
+    """승인 왕복 중 hold 만료 → 409 HOLD_EXPIRED + 자동 환불 (좌석 상태 전이 note)."""
 
 
 async def test_cancel_restores_seat_only_after_refund() -> None:
-    """환불 실패 시 좌석이 복원되지 않아야 한다 (§7.3 순서 규칙)."""
+    """환불 실패 시 좌석이 복원되지 않아야 한다 (취소와 환불 순서 규칙)."""

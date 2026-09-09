@@ -50,7 +50,7 @@ down:          ## 컨테이너와 볼륨까지 정리
 migrate: check-deps up  ## 스키마 적용 (최신 리비전까지)
 	$(ALEMBIC) upgrade head
 
-revision: check-deps    ## 모델 변경 후 리비전 생성. 생성물은 반드시 읽고 손볼 것 (ADR 0002)
+revision: check-deps    ## 모델 변경 후 리비전 생성. 생성물은 반드시 읽고 손볼 것 (결정 기록: 마이그레이션 전략)
 	@test -n "$(m)" || (echo 'usage: make revision m="설명"'; exit 1)
 	$(ALEMBIC) revision --autogenerate -m "$(m)"
 
@@ -66,19 +66,19 @@ drift: check-deps up      ## 모델과 DB가 어긋났는지 확인. CI에 걸�
 api: check-deps           ## 개발 서버 (http://localhost:8000/docs)
 	$(UVICORN) app.main:app --reload --port 8000
 
-worker: check-deps        ## 배치 워커 4종 동시 실행 (§2.1)
+worker: check-deps        ## 배치 워커 4종 동시 실행 (배치 워커)
 	$(PYTHON) -m app.worker
 
 test-unit: check-deps     ## DB 없이 도는 도메인 테스트만
 	$(PYTEST) -m "not integration" -q
 
-test: check-deps up       ## 전체. docs/design.md §10 표를 그대로 실행한다
+test: check-deps up       ## 전체. docs/design.md 검증 시나리오 표를 그대로 실행한다
 	$(PYTEST) -q
 
 test-concurrency: check-deps up  ## 2주차의 진짜 산출물
 	$(PYTEST) tests/test_concurrency.py -q
 
-load: check-deps up       ## 오픈런 부하 (§10 마지막 두 줄)
+load: check-deps up       ## 오픈런 부하 (검증 시나리오 마지막 두 줄)
 	$(LOCUST) -f load/locustfile.py --host http://localhost:8000
 
 lint: check-deps          ## ruff + mypy

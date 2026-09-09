@@ -1,8 +1,8 @@
-"""SQLAlchemy 모델 — 스키마의 단일 원천 (설계 문서 §3)
+"""SQLAlchemy 모델 — 스키마의 단일 원천 (설계 문서: 재고 모델)
 
 이 파일은 **스키마 정의 전용**이다. 쿼리가 이 모델을 통해 나가지는 않는다 —
 선점·스윕·확정 SQL은 `app/infra/db/queries.py` 의 raw SQL이고, 그 쿼리들의
-정확한 형태가 곧 설계다 (§5.2, §5.4, §7.1). 모델은 두 가지 역할만 한다.
+정확한 형태가 곧 설계다 (좌석 선점, 만료 스윕, 확정 트랜잭션). 모델은 두 가지 역할만 한다.
 
   1. Alembic autogenerate 가 diff를 뜨는 대상
   2. 컬럼·제약·인덱스가 한눈에 보이는 문서
@@ -15,7 +15,7 @@ Postgres 전용 기능을 SQLAlchemy 로 표현하는 방법이 여기 다 들�
   복합 CHECK       CheckConstraint(...)
 
 autogenerate 는 이것들을 **최초 생성**은 제대로 해주지만 **이후 변경 감지**는
-불완전하다. 주의사항은 docs/adr/0002-migrations.md 에 정리해 두었다.
+불완전하다. 주의사항은 결정 기록: 마이그레이션 전략 에 정리해 두었다.
 """
 
 from __future__ import annotations
@@ -78,7 +78,7 @@ class Venue(Base):
 
 
 class Seat(Base):
-    """물리 좌석. 공연장에 고정이며 회차와 무관하다 (§11: 다중 공연장은 미룸)."""
+    """물리 좌석. 공연장에 고정이며 회차와 무관하다 (미룬 것: 다중 공연장은 미룸)."""
 
     __tablename__ = "seats"
     __table_args__ = (
@@ -113,9 +113,9 @@ class Schedule(Base):
 
     id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=True)
     performance_id: Mapped[int] = mapped_column(sa.ForeignKey("performances.id"), nullable=False)
-    #: 관람일시. 취소 수수료 계산의 기준 (§7.3)
+    #: 관람일시. 취소 수수료 계산의 기준 (취소와 환불)
     starts_at: Mapped[datetime] = mapped_column(_ts(), nullable=False)
-    #: 이 시각 전 요청은 425 Too Early (§6.1)
+    #: 이 시각 전 요청은 425 Too Early (대기열 방어선)
     sale_opens_at: Mapped[datetime] = mapped_column(_ts(), nullable=False)
 
 
@@ -125,7 +125,7 @@ class Schedule(Base):
 class Order(Base):
     __tablename__ = "orders"
     __table_args__ = (
-        # 리컨실러가 훑는 대상은 PENDING 주문뿐이다 (§2.1).
+        # 리컨실러가 훑는 대상은 PENDING 주문뿐이다 (배치 워커).
         sa.Index(
             "ix_orders_pending",
             "created_at",
@@ -139,7 +139,7 @@ class Order(Base):
     status: Mapped[str] = mapped_column(OrderStatus, nullable=False, server_default="PENDING")
     total_amount: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     booking_fee: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
-    #: 멱등성 1겹 (§7.2). 같은 키로 몇 번 눌러도 주문은 하나다.
+    #: 멱등성 1겹 (멱등성). 같은 키로 몇 번 눌러도 주문은 하나다.
     idempotency_key: Mapped[str] = mapped_column(sa.Text, nullable=False, unique=True)
     #: 중복 요청에 되돌려줄 최초 응답 스냅샷
     response_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
@@ -152,7 +152,7 @@ class Order(Base):
 
 
 class ScheduleSeat(Base):
-    """회차별 좌석 재고. 이 테이블이 설계 전체의 중심이다 (§3).
+    """회차별 좌석 재고. 이 테이블이 설계 전체의 중심이다 (재고 모델).
 
     재고가 카운터가 아니라 행이므로 감산 경쟁이 없고, 오버부킹은 "숫자를 잘못 뺀
     버그"가 아니라 유니크 제약 위반이 되어 DB가 거절한다.
@@ -168,14 +168,14 @@ class ScheduleSeat(Base):
             " OR (status <> 'HELD' AND held_by IS NULL AND hold_expires_at IS NULL)",
             name="hold_shape",
         ),
-        # 좌석맵은 회차 단위 1,200행 전량 조회다. INCLUDE로 힙 접근을 없앤다 (§5.5).
+        # 좌석맵은 회차 단위 1,200행 전량 조회다. INCLUDE로 힙 접근을 없앤다 (좌석맵 조회 부하).
         sa.Index(
             "ix_seatmap",
             "schedule_id",
             postgresql_include=["seat_id", "grade", "price", "status"],
         ),
         # 만료 스윕이 훑는 대상은 선점분뿐이다. 부분 인덱스로 스캔량을 재고 전체에서
-        # 동시 선점 좌석 수(수백 행)로 줄인다 (§5.4).
+        # 동시 선점 좌석 수(수백 행)로 줄인다 (만료 스윕).
         sa.Index(
             "ix_hold_expiry",
             "hold_expires_at",
@@ -195,7 +195,7 @@ class ScheduleSeat(Base):
 
 
 class OrderItem(Base):
-    """이중 판매의 최종 방어선 (§7.2 DB 겹).
+    """이중 판매의 최종 방어선 (멱등성 DB 겹).
 
     schedule_seat_id 의 UNIQUE 가 핵심이다. 한 재고 행은 평생 한 주문 항목에만
     붙으므로, 앞의 두 겹(HTTP 멱등키·사가 조건부 전이)이 다 뚫려도 여기서 23505 가 난다.
@@ -221,12 +221,12 @@ class Payment(Base):
 
     id: Mapped[int] = mapped_column(sa.BigInteger, primary_key=True, autoincrement=True)
     order_id: Mapped[int] = mapped_column(sa.ForeignKey("orders.id"), nullable=False, index=True)
-    #: PG 거래번호. 웹훅 중복 판정 키 (§7.2)
+    #: PG 거래번호. 웹훅 중복 판정 키 (멱등성)
     pg_tid: Mapped[str | None] = mapped_column(sa.Text, nullable=True, unique=True)
     status: Mapped[str] = mapped_column(PayStatus, nullable=False)
     amount: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     #: 취소 시점의 수수료 계산 결과 스냅샷.
-    #: 정책이 바뀌어도 과거 취소의 근거는 안 흔들린다 (§7.3).
+    #: 정책이 바뀌어도 과거 취소의 근거는 안 흔들린다 (취소와 환불).
     fee_snapshot: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     requested_at: Mapped[datetime] = mapped_column(_ts(), nullable=False, server_default=sa.func.now())
     approved_at: Mapped[datetime | None] = mapped_column(_ts(), nullable=True)
@@ -237,7 +237,7 @@ class Payment(Base):
 
 
 class Outbox(Base):
-    """확정 트랜잭션과 같이 커밋된다 (§7.1).
+    """확정 트랜잭션과 같이 커밋된다 (확정 트랜잭션).
 
     "좌석은 잡혔는데 알림톡이 안 갔다"가 원천적으로 생기지 않는다.
     """

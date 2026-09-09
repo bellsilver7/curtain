@@ -1,6 +1,6 @@
-"""raw SQL — 설계 문서 §3, §5.2, §5.4, §5.5
+"""raw SQL — 설계 문서: 재고 모델, 좌석 선점, 만료 스윕, 좌석맵 조회 부하
 
-ORM 으로 감싸지 않는다. 이 쿼리들의 정확한 형태가 곧 설계다 (ADR 0002).
+ORM 으로 감싸지 않는다. 이 쿼리들의 정확한 형태가 곧 설계다 (결정 기록: 마이그레이션 전략).
 `FOR UPDATE SKIP LOCKED`, CTE 안의 `guard` 절, 조건부 `WHERE status = 기대값` —
 전부 ORM 이 가려버리면 리뷰에서 보이지 않는 것들이다.
 """
@@ -19,7 +19,7 @@ _GRADES = sa.bindparam("grades", type_=ARRAY(sa.Text))
 _PRICES = sa.bindparam("prices", type_=ARRAY(sa.Integer))
 
 
-# ══════════════════════════════════════════════════════════════════ 좌석 전개 (§3)
+# ══════════════════════════════════════════════════════════════════ 좌석 전개 (재고 모델)
 
 INSERT_VENUE = sa.text("""
 INSERT INTO venues (name, address) VALUES (:name, :address) RETURNING id
@@ -39,7 +39,7 @@ RETURNING id
 
 
 EXPAND_SCHEDULE_SEATS = sa.text("""
--- 회차 오픈 시 재고 행을 전개한다 (§3). schedules × seats → schedule_seats.
+-- 회차 오픈 시 재고 행을 전개한다 (재고 모델). schedules × seats → schedule_seats.
 --
 -- ON CONFLICT DO NOTHING 이 이 문장을 멱등하게 만든다. 회차 오픈 처리가 두 번
 -- 실행되거나 재시도되어도 재고가 늘어나지 않는다 — uq_schedule_seat 가 받아낸다.
@@ -55,7 +55,7 @@ RETURNING id
 """).bindparams(_ZONES, _ROWS, _GRADES, _PRICES)
 
 
-# ══════════════════════════════════════════════════════════════ 좌석 선점 (§5.2)
+# ══════════════════════════════════════════════════════════════ 좌석 선점
 
 LOCK_USER_QUOTA = sa.text("""
 -- (회차, 사용자) 단위 어드바이저리 락. HOLD_SEATS 직전에 같은 트랜잭션에서 잡는다.
@@ -75,12 +75,12 @@ SELECT pg_advisory_xact_lock(hashtext(:quota_key)::bigint)
 
 
 HOLD_SEATS = sa.text("""
--- 좌석 선점. 요청 좌석 전량을 잡거나 0석이다 (원칙 02).
+-- 좌석 선점. 요청 좌석 전량을 잡거나 0석이다 (원칙 "부분 성공은 없다").
 --
 -- 애플리케이션에 분기가 없다는 게 핵심이다. "3석은 됐고 1석은 안 됨" 이라는
 -- 중간 상태가 만들어질 수 있는 코드 경로 자체가 존재하지 않는다.
 WITH owned AS (
-    -- 회차당 보유 매수 (§1.1 MAX_SEATS_PER_ORDER).
+    -- 회차당 보유 매수 (정책 상수 MAX_SEATS_PER_ORDER).
     -- 유효한 hold 와 이미 결제된 좌석을 함께 센다. 만료된 hold 는 세지 않는다.
     SELECT count(*) AS n
       FROM schedule_seats ss
@@ -106,7 +106,7 @@ target AS (
 ),
 guard AS (
     -- 전량 확보 여부와 구매 한도를 SQL 안에서 판정한다.
-    -- 밖에서 세면 세는 시점과 쓰는 시점 사이에 남이 끼어든다 (원칙 03).
+    -- 밖에서 세면 세는 시점과 쓰는 시점 사이에 남이 끼어든다 (원칙 "모든 상태 전이는 조건부 쓰기").
     SELECT (SELECT count(*) FROM target) = cardinality(:seat_ids)
        AND (SELECT n FROM owned) + cardinality(:seat_ids) <= :max_seats
         AS ok
@@ -123,7 +123,7 @@ RETURNING s.seat_id, s.grade, s.price, s.hold_expires_at
 """).bindparams(_SEAT_IDS)
 
 
-# 실패 응답의 unavailable_seat_ids 를 채우기 위한 조회 (§8.1).
+# 실패 응답의 unavailable_seat_ids 를 채우기 위한 조회 (API 스펙).
 # 클라이언트가 좌석맵 전체를 다시 받지 않고 그 좌석만 회색으로 칠할 수 있게 한다.
 FIND_UNAVAILABLE_SEATS = sa.text("""
 SELECT seat_id
@@ -147,7 +147,7 @@ RETURNING seat_id
 """).bindparams(_SEAT_IDS)
 
 
-# ══════════════════════════════════════════════════════════ 만료 스윕 (§5.4)
+# ══════════════════════════════════════════════════════════ 만료 스윕
 
 SWEEP_EXPIRED_HOLDS = sa.text("""
 -- 1s tick. 클라이언트가 브라우저를 닫아버린 경우의 유일한 회수 수단이다.
@@ -167,7 +167,7 @@ RETURNING schedule_id, seat_id   -- 좌석맵 캐시 무효화 대상
 # ══════════════════════════════════════════════════════════ 좌석맵 · 검증
 
 SEATMAP = sa.text("""
--- 회차 단위 전량 조회. ix_seatmap 의 INCLUDE 로 힙 접근 없이 인덱스에서 끝난다 (§5.5).
+-- 회차 단위 전량 조회. ix_seatmap 의 INCLUDE 로 힙 접근 없이 인덱스에서 끝난다 (좌석맵 조회 부하).
 SELECT ss.seat_id, s.zone, s.row_label, s.col_no, ss.grade, ss.price, ss.status
   FROM schedule_seats ss
   JOIN seats s ON s.id = ss.seat_id
@@ -177,7 +177,7 @@ SELECT ss.seat_id, s.zone, s.row_label, s.col_no, ss.grade, ss.price, ss.status
 
 
 SEAT_STATUS_COUNTS = sa.text("""
--- 총량 보존 불변식 (§10 마지막 줄). 전체 테스트 뒤에 항상 붙인다.
+-- 총량 보존 불변식 (검증 시나리오 마지막 줄). 전체 테스트 뒤에 항상 붙인다.
 SELECT status::text AS status, count(*) AS n
   FROM schedule_seats
  WHERE schedule_id = :schedule_id

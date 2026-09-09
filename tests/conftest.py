@@ -1,10 +1,10 @@
-"""테스트 픽스처 — 설계 문서 §10
+"""테스트 픽스처 — 설계 문서: 검증 시나리오
 
 `integration` 마크가 붙은 테스트는 docker-compose 의 postgres 를 요구한다.
 `make test-unit` 은 그것들을 제외하고 도메인 테스트만 돌린다.
 
 동시성 테스트는 커넥션을 많이 쓴다. 풀이 좁으면 "락 경합"이 아니라 "풀 대기"를
-측정하게 되고, §5.2 의 검증이 무의미해진다 — 그래서 테스트 엔진은 풀을 넓게 잡는다.
+측정하게 되고, 좌석 선점 검증이 무의미해진다 — 그래서 테스트 엔진은 풀을 넓게 잡는다.
 """
 
 from __future__ import annotations
@@ -93,11 +93,11 @@ class Seeded:
 async def seeded(engine: AsyncEngine, clean_db: None) -> Seeded:
     """1,200석 공연장 · 회차 3개 · 재고 3,600행 · 사용자 CONCURRENCY+10 명.
 
-    설계 문서 §1 의 "가정"을 그대로 재현한다. 총량 보존 불변식(§10)이
+    설계 문서가 가정하는 규모를 그대로 재현한다. 총량 보존 불변식이
     `1200 × 3 = 3600` 을 기대하므로 회차 셋 다 전개한다.
     """
     layout = DEMO_HALL
-    assert layout.total_seats == 1200, "레이아웃이 §1 가정(1,200석)과 다릅니다"
+    assert layout.total_seats == 1200, "레이아웃이 설계 문서의 가정(1,200석)과 다릅니다"
 
     async with engine.begin() as conn:
         venue_id = await schedule_service.create_venue(conn, layout)
@@ -112,7 +112,7 @@ async def seeded(engine: AsyncEngine, clean_db: None) -> Seeded:
             )
         ).scalar_one()
 
-        # 관람일시는 D+21 로 둔다. 취소 수수료 구간(§7.3)에서 "무료" 쪽에 들어가야
+        # 관람일시는 D+21 로 둔다. 취소 수수료 구간에서 "무료" 쪽에 들어가야
         # 취소 테스트가 수수료 계산과 얽히지 않는다.
         base = datetime.now(timezone.utc) + timedelta(days=21)
         schedule_ids: list[int] = []

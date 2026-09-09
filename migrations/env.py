@@ -1,4 +1,4 @@
-"""Alembic 실행 환경 — 설계 문서 §3
+"""Alembic 실행 환경 — 설계 문서: 재고 모델
 
 접속 정보는 DATABASE_URL 환경변수에서만 읽는다. alembic.ini 에 박으면
 비밀번호가 저장소에 남는다.
@@ -6,7 +6,7 @@
 autogenerate 를 쓰지만 무조건 믿지는 않는다. 이 스키마는 Alembic 이 diff 를
 잘 못 뜨는 Postgres 기능(부분 인덱스 · 커버링 인덱스 · CHECK · ENUM) 위에
 서 있어서, 생성된 리비전은 항상 사람이 읽고 손본다.
-자세한 주의사항은 docs/adr/0002-migrations.md 참고.
+자세한 주의사항은 결정 기록: 마이그레이션 전략 참고.
 """
 
 from __future__ import annotations

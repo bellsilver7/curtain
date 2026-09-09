@@ -1,4 +1,4 @@
-"""만료 hold 회수 — 설계 문서 §5.4
+"""만료 hold 회수 — 설계 문서: 만료 스윕
 
 1s tick. FOR UPDATE SKIP LOCKED 이므로 여러 대 띄워도 안전하다.
 """

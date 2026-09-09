@@ -1,9 +1,9 @@
-"""동시성 · 재고 정합성 — 설계 문서 §10
+"""동시성 · 재고 정합성 — 설계 문서: 검증 시나리오
 
 이 파일의 통과 로그가 2주차의 진짜 산출물이다. 기능이 도는 것보다
 "동시에 던져도 틀리지 않는다"가 증명되는 게 이 프로젝트의 목적이다.
 
-여기 있는 테스트 이름은 §10 표의 시나리오와 1:1로 대응한다.
+여기 있는 테스트 이름은 설계 문서의 검증 시나리오 표와 1:1로 대응한다.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ async def _status_counts(engine: AsyncEngine, schedule_id: int) -> dict[str, int
         return {r["status"]: r["n"] for r in rows}
 
 
-# ─────────────────────────────────────────────────────── §10 시나리오
+# ─────────────────────────────────────────────────────── 검증 시나리오
 
 
 async def test_single_seat_contention(engine: AsyncEngine, seeded: Seeded) -> None:
@@ -102,7 +102,7 @@ async def test_single_seat_contention(engine: AsyncEngine, seeded: Seeded) -> No
 async def test_no_partial_success(engine: AsyncEngine, seeded: Seeded) -> None:
     """4석 요청 중 1석을 다른 유저가 먼저 선점 → 요청 전체 실패.
 
-    합격 기준: 나머지 3석은 AVAILABLE 유지. 쓰레기 hold 0건 (원칙 02).
+    합격 기준: 나머지 3석은 AVAILABLE 유지. 쓰레기 hold 0건 (원칙 "부분 성공은 없다").
     """
     a, b, c, d = seeded.seat_ids[:4]
 
@@ -130,7 +130,7 @@ async def test_no_partial_success(engine: AsyncEngine, seeded: Seeded) -> None:
 async def test_cross_seat_deadlock(engine: AsyncEngine, seeded: Seeded) -> None:
     """[A,B] 와 [B,A] 를 동시에 → 데드락 0건.
 
-    발생하면 §5.2 의 `ORDER BY seat_id FOR UPDATE` 잠금 순서 가정이 깨진 것이고,
+    발생하면 `ORDER BY seat_id FOR UPDATE` 잠금 순서 가정이 깨진 것이고,
     `SELECT ... FOR UPDATE` 를 별도 문장으로 분리해야 한다.
     설계 문서가 "문서를 믿지 말고 직접 확인하라"고 지목한 바로 그 지점이다.
     """
@@ -149,7 +149,7 @@ async def test_cross_seat_deadlock(engine: AsyncEngine, seeded: Seeded) -> None:
 
     results = Counter(await asyncio.gather(*tasks))
 
-    assert results["deadlock"] == 0, f"데드락 발생 — §5.2 잠금 순서 가정이 깨졌다: {results}"
+    assert results["deadlock"] == 0, f"데드락 발생 — 잠금 순서 가정이 깨졌다: {results}"
     # 각 쌍에서 정확히 한쪽만 성공해야 한다.
     assert results["ok"] == pairs, f"쌍마다 1건씩 성공해야 함: {results}"
 
@@ -160,7 +160,7 @@ async def test_cross_seat_deadlock(engine: AsyncEngine, seeded: Seeded) -> None:
 async def test_expired_hold_is_reclaimed_without_worker(
     engine: AsyncEngine, seeded: Seeded
 ) -> None:
-    """만료된 hold 는 스윕 워커를 기다리지 않고 선점 쿼리가 즉시 회수한다 (§5.2).
+    """만료된 hold 는 스윕 워커를 기다리지 않고 선점 쿼리가 즉시 회수한다.
 
     워커는 1s tick 이므로 그 사이에도 좌석은 팔릴 수 있어야 한다.
     """
@@ -185,7 +185,7 @@ async def test_expired_hold_is_reclaimed_without_worker(
 
 
 async def test_sweeper_reclaims_expired_holds(engine: AsyncEngine, seeded: Seeded) -> None:
-    """hold_sweeper 가 만료분을 AVAILABLE 로 되돌린다 (§5.4).
+    """hold_sweeper 가 만료분을 AVAILABLE 로 되돌린다.
 
     클라이언트가 브라우저를 닫아버린 경우의 유일한 회수 수단.
     """
@@ -214,10 +214,10 @@ async def test_sweeper_reclaims_expired_holds(engine: AsyncEngine, seeded: Seede
 async def test_quota_is_enforced_under_concurrency(
     engine: AsyncEngine, seeded: Seeded
 ) -> None:
-    """한 유저가 1석씩 동시에 여러 번 요청해도 회차당 4매를 넘지 못한다 (§1.1).
+    """한 유저가 1석씩 동시에 여러 번 요청해도 회차당 4매를 넘지 못한다.
 
     한도 검사를 애플리케이션에서 하면 "세는 시점과 쓰는 시점" 사이에 끼어들 수
-    있으므로 CTE 안에서 판정한다 (원칙 03). 이 테스트가 그걸 지킨다.
+    있으므로 SQL 안에서 판정한다. 이 테스트가 그걸 지킨다.
     """
     user = seeded.user_ids[0]
     attempts = 12
@@ -242,7 +242,7 @@ async def test_quota_is_enforced_under_concurrency(
 
 
 async def test_seat_count_invariant(engine: AsyncEngine, seeded: Seeded) -> None:
-    """총량 보존: AVAILABLE + HELD + BOOKED = 1200 × 회차수 (§10 마지막 줄).
+    """총량 보존: AVAILABLE + HELD + BOOKED = 1200 × 회차수.
 
     개별 테스트가 다 통과해도 이 합이 안 맞으면 좌석 행이 새고 있다는 뜻이고,
     그건 위의 어떤 실패보다 심각한 신호다.
@@ -274,7 +274,7 @@ async def test_seat_count_invariant(engine: AsyncEngine, seeded: Seeded) -> None
 async def test_expand_schedule_seats_is_idempotent(
     engine: AsyncEngine, seeded: Seeded
 ) -> None:
-    """회차 재고 전개를 두 번 해도 재고가 늘어나지 않는다 (§3).
+    """회차 재고 전개를 두 번 해도 재고가 늘어나지 않는다.
 
     uq_schedule_seat + ON CONFLICT DO NOTHING 이 받아낸다. 회차 오픈 처리가
     재시도되는 것은 정상 운영이므로 멱등해야 한다.
@@ -294,6 +294,6 @@ async def test_expand_schedule_seats_is_idempotent(
 
 
 async def test_layout_matches_design_assumptions(seeded: Seeded) -> None:
-    """공연장 레이아웃이 설계 문서 §1 의 가정과 같은지 (VIP 120 / R 380 / S 700)."""
+    """공연장 레이아웃이 설계 문서의 가정과 같은지 (VIP 120 / R 380 / S 700)."""
     assert seeded.layout.count_by_grade() == {"VIP": 120, "R": 380, "S": 700}
     assert seeded.layout.total_seats == 1200

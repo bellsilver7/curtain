@@ -1,7 +1,7 @@
-"""좌석 선점 유스케이스 — 설계 문서 §5.2
+"""좌석 선점 유스케이스 — 설계 문서: 좌석 선점
 
-이 단계에서는 **Postgres 만으로** 정확해야 한다. Redis 좌석 게이트(§5.3)는
-아직 붙이지 않는다 — 원칙 01("정합성의 단일 진실은 PostgreSQL")이 참인지 먼저
+이 단계에서는 **Postgres 만으로** 정확해야 한다. Redis 좌석 게이트는
+아직 붙이지 않는다 — 원칙 "정합성의 단일 진실은 PostgreSQL"이 참인지 먼저
 증명해야, 나중에 붙는 게이트가 순수한 최적화임이 증명된다.
 게이트를 먼저 붙이면 "게이트 덕분에 맞는 것"과 "DB 덕분에 맞는 것"을 구분할 수 없다.
 """
@@ -18,7 +18,7 @@ from app.infra.db import queries
 
 
 class HoldRejected(Exception):
-    """선점 실패. 부분 성공은 없으므로 실패는 항상 전량 실패다 (원칙 02)."""
+    """선점 실패. 부분 성공은 없으므로 실패는 항상 전량 실패다 (원칙 "부분 성공은 없다")."""
 
     code = "SEAT_TAKEN"
 
@@ -30,7 +30,7 @@ class HoldRejected(Exception):
 
 
 class QuotaExceeded(HoldRejected):
-    """회차당 구매 한도 초과 (§1.1)."""
+    """회차당 구매 한도 초과 (정책 상수)."""
 
     code = "QUOTA_EXCEEDED"
 
@@ -114,7 +114,7 @@ async def acquire(
         raise QuotaExceeded([])
 
     # guard 가 통과했으면 전량이다. 그래도 확인한다 — 이 assert 가 깨지면
-    # §5.2 의 SQL 이 설계와 다르게 동작한다는 뜻이고, 조용히 넘어가면 안 된다.
+    # HOLD_SEATS 가 설계와 다르게 동작한다는 뜻이고, 조용히 넘어가면 안 된다.
     if len(rows) != len(seat_ids):
         raise AssertionError(
             f"부분 선점 발생: 요청 {len(seat_ids)}석 중 {len(rows)}석. HOLD_SEATS 의 guard 절 확인 필요"
@@ -142,7 +142,7 @@ async def release(
 
 
 async def sweep_expired(conn: AsyncConnection, *, batch: int = 500) -> list[tuple[int, int]]:
-    """만료 hold 회수 (§5.4). `hold_sweeper` 워커가 1s 마다 호출한다.
+    """만료 hold 회수. `hold_sweeper` 워커가 1s 마다 호출한다.
 
     반환값 `(schedule_id, seat_id)` 목록은 좌석맵 캐시 무효화 대상이다.
     """
