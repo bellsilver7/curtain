@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "curtain"
 version = "0.1.0"
@@ -25,6 +29,13 @@ dev = [
     "locust>=2.32",
     "psycopg[binary]>=3.2",
 ]
+
+# app 만 임포트 가능한 패키지다. load/ 는 locust 스크립트, migrations/ 는
+# alembic 이 직접 읽는 디렉터리, tests/ 는 pytest 가 rootdir 로 찾는다.
+# 명시하지 않으면 setuptools 가 flat-layout 자동 탐색에서 셋 다 패키지로 보고 거부한다.
+[tool.setuptools.packages.find]
+include = ["app*"]
+namespaces = false
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
