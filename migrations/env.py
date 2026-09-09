@@ -61,7 +61,7 @@ def _configure(connection: Connection | None = None, **extra: object) -> None:
 
 
 def run_migrations_offline() -> None:
-    """`alembic upgrade --sql` — DB 접속 없이 SQL만 출력."""
+    """alembic upgrade --sql — DB 접속 없이 SQL만 출력."""
     _configure(url=_url(), literal_binds=True, dialect_opts={"paramstyle": "named"})
     with context.begin_transaction():
         context.run_migrations()

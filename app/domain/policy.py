@@ -2,7 +2,7 @@
 
 이 모듈은 표준 라이브러리만 import 한다. DB도 Redis도 HTTP도 모른다 (계층 규칙).
 정책 숫자를 코드 전역에 흩뿌리지 않기 위한 단일 출처이며,
-`tests/test_seat_domain.py` 가 DB 없이 이 파일만 검증한다.
+tests/test_seat_domain.py 가 DB 없이 이 파일만 검증한다.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from decimal import Decimal
 #: 좌석 선점 유효 시간. 국내 예매 서비스 관례(약 7분)를 따랐다.
 HOLD_TTL = timedelta(seconds=420)
 
-#: Redis 좌석 게이트 TTL. hold TTL보다 **짧아야** 한다 (Redis 좌석 게이트).
+#: Redis 좌석 게이트 TTL. hold TTL보다 짧아야 한다 (Redis 좌석 게이트).
 #: 게이트가 DB보다 오래 남으면 이미 풀린 좌석이 계속 막히는 유령 매진이 생긴다.
 SEAT_GATE_TTL = timedelta(seconds=410)
 

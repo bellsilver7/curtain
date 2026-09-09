@@ -1,7 +1,7 @@
 """raw SQL — 설계 문서: 재고 모델, 좌석 선점, 만료 스윕, 좌석맵 조회 부하
 
 ORM 으로 감싸지 않는다. 이 쿼리들의 정확한 형태가 곧 설계다 (결정 기록: 마이그레이션 전략).
-`FOR UPDATE SKIP LOCKED`, CTE 안의 `guard` 절, 조건부 `WHERE status = 기대값` —
+FOR UPDATE SKIP LOCKED, CTE 안의 guard 절, 조건부 WHERE status = 기대값 —
 전부 ORM 이 가려버리면 리뷰에서 보이지 않는 것들이다.
 """
 
@@ -60,8 +60,8 @@ RETURNING id
 LOCK_USER_QUOTA = sa.text("""
 -- (회차, 사용자) 단위 어드바이저리 락. HOLD_SEATS 직전에 같은 트랜잭션에서 잡는다.
 --
--- 왜 필요한가: HOLD_SEATS 의 `owned` 절은 "이 유저가 이 회차에 몇 석 갖고 있나"를
--- 세는 **술어(predicate)** 다. 행 잠금은 target 좌석에만 걸리므로, 서로 다른
+-- 왜 필요한가: HOLD_SEATS 의 owned 절은 "이 유저가 이 회차에 몇 석 갖고 있나"를
+-- 세는 술어(predicate) 다. 행 잠금은 target 좌석에만 걸리므로, 서로 다른
 -- 좌석을 노리는 동시 요청들은 아무것도 공유하지 않고 각자 owned=0 을 읽는다.
 -- READ COMMITTED 에서 전형적인 write skew 이고, 실제로 4매 한도가 7매로 새는 것을
 -- 테스트로 재현했다 (test_quota_is_enforced_under_concurrency).

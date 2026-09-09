@@ -88,8 +88,8 @@ async def test_no_partial_success(engine: AsyncEngine, seeded: Seeded) -> None:
 async def test_cross_seat_deadlock(engine: AsyncEngine, seeded: Seeded) -> None:
     """[A,B] 와 [B,A] 를 동시에 → 데드락 0건.
 
-    발생하면 `ORDER BY seat_id FOR UPDATE` 잠금 순서 가정이 깨진 것이고,
-    `SELECT ... FOR UPDATE` 를 별도 문장으로 분리해야 한다.
+    발생하면 ORDER BY seat_id FOR UPDATE 잠금 순서 가정이 깨진 것이고,
+    SELECT ... FOR UPDATE 를 별도 문장으로 분리해야 한다.
     설계 문서가 "문서를 믿지 말고 직접 확인하라"고 지목한 바로 그 지점이다.
     """
     pairs = 120

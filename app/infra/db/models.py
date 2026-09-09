@@ -1,7 +1,7 @@
 """SQLAlchemy 모델 — 스키마의 단일 원천 (설계 문서: 재고 모델)
 
-이 파일은 **스키마 정의 전용**이다. 쿼리가 이 모델을 통해 나가지는 않는다 —
-선점·스윕·확정 SQL은 `app/infra/db/queries.py` 의 raw SQL이고, 그 쿼리들의
+이 파일은 스키마 정의 전용이다. 쿼리가 이 모델을 통해 나가지는 않는다 —
+선점·스윕·확정 SQL은 app/infra/db/queries.py 의 raw SQL이고, 그 쿼리들의
 정확한 형태가 곧 설계다 (좌석 선점, 만료 스윕, 확정 트랜잭션). 모델은 두 가지 역할만 한다.
 
   1. Alembic autogenerate 가 diff를 뜨는 대상
@@ -14,7 +14,7 @@ Postgres 전용 기능을 SQLAlchemy 로 표현하는 방법이 여기 다 들�
   커버링 인덱스    Index(..., postgresql_include=[...])
   복합 CHECK       CheckConstraint(...)
 
-autogenerate 는 이것들을 **최초 생성**은 제대로 해주지만 **이후 변경 감지**는
+autogenerate 는 이것들을 최초 생성은 제대로 해주지만 이후 변경 감지는
 불완전하다. 주의사항은 결정 기록: 마이그레이션 전략 에 정리해 두었다.
 """
 

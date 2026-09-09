@@ -11,7 +11,7 @@ pytestmark = [pytest.mark.integration, pytest.mark.skip(reason="TODO(3주차)")]
 async def test_pg_timeout_but_actually_approved() -> None:
     """FakePG 30초 지연 + 실제로는 승인 → 사용자는 실패 응답.
 
-    합격 기준: 리컨실러가 승인을 발견해 **확정**. 최종적으로 좌석 1건, 결제 1건.
+    합격 기준: 리컨실러가 승인을 발견해 확정. 최종적으로 좌석 1건, 결제 1건.
     응답 유실을 실패로 취급하면 돈은 나갔는데 좌석이 없는 사고가 난다 (원칙 "외부 호출은 리컨실러가 받친다").
     """
 

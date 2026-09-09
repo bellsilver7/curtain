@@ -1,20 +1,20 @@
 """Redis 좌석 게이트 (설계 문서: Redis 좌석 게이트)
 
-이 파일은 **블랙박스 명세**다. `hold_service.acquire()` / `release()` 의 겉보기
+이 파일은 블랙박스 명세다. hold_service.acquire() / release() 의 겉보기
 동작만 검증하고, Redis 클라이언트 모듈이나 Lua 스크립트를 직접 import 하지
 않는다. 구현 방식(키 이름, 스크립트 개수, 클라이언트 구조)을 테스트가 미리
 못박으면 리팩터링이 테스트를 깨게 되고, 그러면 테스트가 설계를 방해한다.
 
-게이트가 증명해야 하는 것은 하나다 — **게이트는 정합성이 아니라 부하를 위한
-것이다.** Redis 를 통째로 날려도 오버부킹은 0건이어야 하고, 대신 Redis 가
+게이트가 증명해야 하는 것은 하나다 — 게이트는 정합성이 아니라 부하를 위한
+것이다. Redis 를 통째로 날려도 오버부킹은 0건이어야 하고, 대신 Redis 가
 살아 있을 때는 패자들이 DB 에 도달하지 않아야 한다.
 
-다섯 건 중 `test_gate_sheds_load_before_db` 만이 게이트 없이는 통과하지 못하는
+다섯 건 중 test_gate_sheds_load_before_db 만이 게이트 없이는 통과하지 못하는
 드라이버다. 나머지 넷은 Postgres 만으로도 초록이었고, 게이트를 붙이면서
 망가뜨릴 수 있는 지점에 놓아둔 함정이다. 초록으로 시작해 초록으로 끝난 테스트는
 아무것도 증명하지 않으므로, 구현 후 일부러 깨뜨려 실제로 빨강이 되는지 확인했다.
 그 과정에서 이 파일의 초기 버전이 (2) 경로를 전혀 검증하지 않는 것을 발견했다 —
-`test_gate_released_when_db_rejects` 의 주석 참고.
+test_gate_released_when_db_rejects 의 주석 참고.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ async def test_gate_sheds_load_before_db(
     이게 게이트의 존재 이유 전체다. 결과(성공 1건)는 게이트가 없어도 맞지만,
     그 결과에 도달하기까지 DB 가 견뎌야 하는 경합량이 200배 다르다.
 
-    구현 힌트가 아니라 제약: 패자에게 `unavailable_seat_ids` 를 주기 위해
+    구현 힌트가 아니라 제약: 패자에게 unavailable_seat_ids 를 주기 위해
     DB 를 다시 조회하면 이 테스트는 통과하지 못한다. 어느 좌석이 막혔는지는
     게이트가 이미 알고 있으므로, 그 정보를 게이트에서 받아 와야 한다.
     """
@@ -112,7 +112,7 @@ async def test_overbooking_survives_redis_flush(engine, seeded: Seeded) -> None:
         await client.ping()
     except Exception as exc:  # noqa: BLE001
         raise AssertionError(
-            f"Redis({REDIS_URL}) 에 붙을 수 없다. `make up` 으로 컨테이너를 띄울 것: {exc}"
+            f"Redis({REDIS_URL}) 에 붙을 수 없다. make up 으로 컨테이너를 띄울 것: {exc}"
         ) from exc
 
     async def _flush_repeatedly() -> None:
@@ -264,7 +264,7 @@ async def test_gate_released_when_db_rejects(engine, seeded: Seeded) -> None:
 
 
 async def test_release_clears_gate(engine, seeded: Seeded) -> None:
-    """`release()` 는 게이트도 지워야 한다.
+    """release() 는 게이트도 지워야 한다.
 
     안 지우면 사용자가 좌석을 바꿨는데 원래 좌석이 게이트 TTL 동안 막힌다.
     좌석 선택을 되돌리는 것은 정상 흐름이므로 즉시 반영돼야 한다.

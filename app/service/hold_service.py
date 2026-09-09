@@ -1,11 +1,11 @@
 """좌석 선점 유스케이스 — 설계 문서: 좌석 선점
 
-정합성은 **Postgres 만으로** 완결된다. 조건부 `UPDATE` 하나가 전량 선점과
+정합성은 Postgres 만으로 완결된다. 조건부 UPDATE 하나가 전량 선점과
 구매 한도를 판정하고, 유니크 제약이 오버부킹을 구조적으로 막는다. 이 성질을
 먼저 테스트로 증명한 뒤에 Redis 게이트를 붙였다 — 순서를 뒤집으면
 "게이트 덕분에 맞는 것"과 "DB 덕분에 맞는 것"을 구분할 수 없다.
 
-게이트는 그 위에 얹힌 **부하 방벽**이다. 같은 좌석에 몰린 수백 요청을 DB 행
+게이트는 그 위에 얹힌 부하 방벽이다. 같은 좌석에 몰린 수백 요청을 DB 행
 잠금까지 내려보내지 않고 걸러낸다. Redis 가 죽으면 게이트를 건너뛰고
 (fail-open) 지연만 늘어난다 — 오버부킹은 나지 않는다.
 """
@@ -68,12 +68,12 @@ async def acquire(
     hold_ttl_sec: int | None = None,
     max_seats: int = policy.MAX_SEATS_PER_ORDER,
 ) -> Hold:
-    """좌석 전량 선점. 하나라도 못 잡으면 `HoldRejected`.
+    """좌석 전량 선점. 하나라도 못 잡으면 HoldRejected.
 
-    호출자가 트랜잭션을 열어야 한다 (`engine.tx()`). 이 함수는 커밋하지 않는다 —
+    호출자가 트랜잭션을 열어야 한다 (engine.tx()). 이 함수는 커밋하지 않는다 —
     선점과 주문 생성을 한 트랜잭션에 묶을 수 있어야 하기 때문이다.
 
-    중복 seat_id 는 거부한다. 허용하면 `cardinality(:seat_ids)` 와 실제 잠근 행 수가
+    중복 seat_id 는 거부한다. 허용하면 cardinality(:seat_ids) 와 실제 잠근 행 수가
     달라져 guard 가 영원히 거짓이 되고, 원인을 찾기 어려운 100% 실패가 된다.
     """
     if not seat_ids:
@@ -92,7 +92,7 @@ async def acquire(
     # 게이트를 DB 앞에 세운다. 실제 hold TTL 을 그대로 넘기는 것이 중요하다 —
     # 게이트가 원본보다 오래 남으면 DB 에서 풀린 좌석이 계속 막히는 유령 매진이 된다.
     #
-    # `keep()` 을 부르지 않고 이 블록을 벗어나면 게이트는 자동 반납된다.
+    # keep() 을 부르지 않고 이 블록을 벗어나면 게이트는 자동 반납된다.
     # DB 가 거절했을 때 반납을 잊는 것이 유령 매진의 주된 원인이므로,
     # 반납이 기본 동작이고 유지가 명시적이다.
     async with gate_client.hold_gate(
@@ -190,9 +190,9 @@ async def release(
 
 
 async def sweep_expired(conn: AsyncConnection, *, batch: int = 500) -> list[tuple[int, int]]:
-    """만료 hold 회수. `hold_sweeper` 워커가 1s 마다 호출한다.
+    """만료 hold 회수. hold_sweeper 워커가 1s 마다 호출한다.
 
-    반환값 `(schedule_id, seat_id)` 목록은 좌석맵 캐시 무효화 대상이다.
+    반환값 (schedule_id, seat_id) 목록은 좌석맵 캐시 무효화 대상이다.
     """
     result = await conn.execute(queries.SWEEP_EXPIRED_HOLDS, {"batch": batch})
     return [(r.schedule_id, r.seat_id) for r in result.mappings()]

@@ -1,7 +1,7 @@
 """테스트 픽스처 — 설계 문서: 검증 시나리오
 
-`integration` 마크가 붙은 테스트는 docker-compose 의 postgres 를 요구한다.
-`make test-unit` 은 그것들을 제외하고 도메인 테스트만 돌린다.
+integration 마크가 붙은 테스트는 docker-compose 의 postgres 를 요구한다.
+make test-unit 은 그것들을 제외하고 도메인 테스트만 돌린다.
 
 동시성 테스트는 커넥션을 많이 쓴다. 풀이 좁으면 "락 경합"이 아니라 "풀 대기"를
 측정하게 되고, 좌석 선점 검증이 무의미해진다 — 그래서 테스트 엔진은 풀을 넓게 잡는다.
@@ -67,8 +67,8 @@ async def engine() -> AsyncIterator[AsyncEngine]:
         await eng.dispose()
 
 
-#: SQL 주석(`--` 부터 줄 끝까지)을 걷어낸다.
-#: 이 프로젝트의 쿼리는 주석이 두껍고, 그 주석 안에 `FOR UPDATE` 같은 문구가
+#: SQL 주석(-- 부터 줄 끝까지)을 걷어낸다.
+#: 이 프로젝트의 쿼리는 주석이 두껍고, 그 주석 안에 FOR UPDATE 같은 문구가
 #: 설명으로 등장한다. 주석을 남겨두면 스파이가 SQL 이 아니라 산문을 센다.
 _SQL_COMMENT = re.compile(r"--[^\n]*")
 
@@ -80,7 +80,7 @@ class SqlSpy:
     "게이트를 붙였다"는 주석은 근거가 아니다. 패자 199건이 DB 에 도달하지
     않는다는 것을 숫자로 보여야 한다.
 
-    문자열 리터럴 안의 `--` 는 구분하지 않는다. 지금 쿼리에는 그런 리터럴이
+    문자열 리터럴 안의 -- 는 구분하지 않는다. 지금 쿼리에는 그런 리터럴이
     없고, 생기면 이 스파이부터 고쳐야 한다.
     """
 
@@ -93,7 +93,7 @@ class SqlSpy:
         self.statements.append(_SQL_COMMENT.sub("", statement))
 
     def count(self, needle: str) -> int:
-        """`needle` 을 포함한 문장 수. 주석은 이미 제거된 상태로 비교한다."""
+        """needle 을 포함한 문장 수. 주석은 이미 제거된 상태로 비교한다."""
         return sum(1 for s in self.statements if needle in s)
 
     def touching(self, table: str) -> int:
@@ -110,7 +110,7 @@ class SqlSpy:
 async def sql_spy(engine: AsyncEngine) -> AsyncIterator[SqlSpy]:
     """DB 왕복을 세는 스파이.
 
-    시드 단계의 문장까지 세지 않으려면 측정 직전에 `spy.reset()` 을 호출한다.
+    시드 단계의 문장까지 세지 않으려면 측정 직전에 spy.reset() 을 호출한다.
     명시적으로 리셋하게 둔 것은, 무엇을 세는 구간인지 테스트를 읽는 사람이
     바로 알 수 있게 하려는 것이다.
     """
@@ -128,7 +128,7 @@ async def sql_spy(engine: AsyncEngine) -> AsyncIterator[SqlSpy]:
 
 @pytest_asyncio.fixture
 async def clean_stores(engine: AsyncEngine) -> AsyncIterator[None]:
-    """Postgres 와 Redis 를 **둘 다** 비운다.
+    """Postgres 와 Redis 를 둘 다 비운다.
 
     Postgres 만 비우면 게이트 키가 다음 테스트로 샌다. 게이트 TTL 은 수백 초라
     TRUNCATE 로 좌석이 비워져도 Redis 는 여전히 그 좌석을 막고 있고, 그러면
@@ -182,7 +182,7 @@ async def seeded(engine: AsyncEngine, clean_stores: None) -> Seeded:
     """1,200석 공연장 · 회차 3개 · 재고 3,600행 · 사용자 CONCURRENCY+10 명.
 
     설계 문서가 가정하는 규모를 그대로 재현한다. 총량 보존 불변식이
-    `1200 × 3 = 3600` 을 기대하므로 회차 셋 다 전개한다.
+    1200 × 3 = 3600 을 기대하므로 회차 셋 다 전개한다.
     """
     layout = DEMO_HALL
     assert layout.total_seats == 1200, "레이아웃이 설계 문서의 가정(1,200석)과 다릅니다"

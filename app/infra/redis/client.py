@@ -1,6 +1,6 @@
 """Redis 좌석 게이트 클라이언트 (설계 문서: Redis 좌석 게이트)
 
-게이트는 **정합성이 아니라 부하를 위한 것이다.** 같은 좌석에 몰린 수백 요청을
+게이트는 정합성이 아니라 부하를 위한 것이다. 같은 좌석에 몰린 수백 요청을
 DB 행 잠금까지 내려보내지 않고 여기서 걸러낸다. Redis 를 통째로 날려도
 오버부킹은 발생하지 않아야 하고, 그래서 이 모듈의 모든 실패는 fail-open 이다.
 
@@ -16,7 +16,7 @@ API 는 컨텍스트 매니저 하나다.
         ...DB 작업...
         gate.keep()          # 성공했을 때만 유지
 
-`keep()` 을 부르지 않고 블록을 벗어나면 게이트는 자동으로 반납된다. 함수 세 개로
+keep() 을 부르지 않고 블록을 벗어나면 게이트는 자동으로 반납된다. 함수 세 개로
 쪼개 두면 "DB 가 거절했을 때 반납"을 잊기 쉽고, 잊으면 유령 매진이 된다 —
 잊을 수 없는 모양으로 만드는 것이 이 설계의 요점이다.
 """
@@ -41,7 +41,7 @@ DEFAULT_URL = "redis://localhost:16379/0"
 
 _LUA_DIR = Path(__file__).parent / "lua"
 
-#: 게이트 TTL / hold TTL 비율. 게이트는 원본(DB)보다 **먼저** 사라져야 한다 —
+#: 게이트 TTL / hold TTL 비율. 게이트는 원본(DB)보다 먼저 사라져야 한다 —
 #: 게이트가 더 오래 남으면 DB 에서 이미 풀린 좌석이 Redis 때문에 계속 막히는,
 #: 진단하기 고약한 유령 매진이 생긴다.
 #:
@@ -104,7 +104,7 @@ async def _bundle() -> _Bundle | None:
         return bundle
 
     try:
-        # **BlockingConnectionPool 을 반드시 쓴다.** 이것이 이 파일에서 가장
+        # BlockingConnectionPool 을 반드시 쓴다. 이것이 이 파일에서 가장
         # 중요한 한 줄이다.
         #
         # 기본 ConnectionPool 은 풀이 마르면 기다리지 않고 즉시
@@ -145,14 +145,14 @@ async def _bundle() -> _Bundle | None:
 
 
 def _keys(schedule_id: int, seat_ids: Sequence[int]) -> list[str]:
-    """게이트 키. `{schedule_id}` 해시 태그로 클러스터 슬롯을 고정한다."""
+    """게이트 키. {schedule_id} 해시 태그로 클러스터 슬롯을 고정한다."""
     return [f"seat:{{{schedule_id}}}:{seat_id}" for seat_id in seat_ids]
 
 
 def _token(user_id: int) -> str:
     """게이트 소유자 표시.
 
-    난수가 아니라 user_id 에서 파생시킨다. `release()` 는 선점과 다른 요청이므로
+    난수가 아니라 user_id 에서 파생시킨다. release() 는 선점과 다른 요청이므로
     난수 토큰을 알 방법이 없고, 그러면 자기 게이트를 반납할 수 없다.
     남의 게이트를 지우지 못하게 하는 성질은 그대로 유지된다 — 다른 사용자는
     다른 토큰이다.
@@ -162,7 +162,7 @@ def _token(user_id: int) -> str:
 
 @dataclass(slots=True)
 class Gate:
-    """게이트 획득 결과. 블록을 벗어날 때 `keep()` 안 했으면 반납된다."""
+    """게이트 획득 결과. 블록을 벗어날 때 keep() 안 했으면 반납된다."""
 
     acquired: bool
     #: 게이트가 알려준 막힌 좌석. DB 를 다시 조회하지 않고 이 값을 응답에 쓴다.
@@ -184,12 +184,12 @@ async def hold_gate(
     seat_ids: Sequence[int],
     hold_ttl_sec: float,
 ) -> AsyncIterator[Gate]:
-    """좌석 게이트를 잡고, `keep()` 하지 않으면 반납한다.
+    """좌석 게이트를 잡고, keep() 하지 않으면 반납한다.
 
-    `seat_ids` 는 오름차순으로 정렬해서 넘긴다 — SQL 의 `ORDER BY seat_id
-    FOR UPDATE` 와 잠금 순서를 맞춰, 교차 요청이 게이트 단계에서 엇갈리지 않게.
+    seat_ids 는 오름차순으로 정렬해서 넘긴다 — SQL 의 ORDER BY seat_id
+    FOR UPDATE 와 잠금 순서를 맞춰, 교차 요청이 게이트 단계에서 엇갈리지 않게.
 
-    Redis 에 닿지 못하면 `acquired=True, degraded=True` 로 통과시킨다.
+    Redis 에 닿지 못하면 acquired=True, degraded=True 로 통과시킨다.
     정합성은 DB 가 지키므로 게이트를 건너뛰어도 오버부킹은 나지 않는다.
     """
     ordered = sorted(set(seat_ids))
@@ -227,7 +227,7 @@ async def hold_gate(
 async def release_gate(
     *, schedule_id: int, user_id: int, seat_ids: Sequence[int]
 ) -> int:
-    """게이트를 명시적으로 반납한다 (`hold_service.release()` 용).
+    """게이트를 명시적으로 반납한다 (hold_service.release() 용).
 
     반환값은 실제로 지운 키 수. Redis 가 없으면 0 이고, 그래도 좌석은 DB 에서
     풀렸으므로 판매에는 문제가 없다 — 게이트 TTL 이 지나면 자연히 열린다.
