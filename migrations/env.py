@@ -15,12 +15,18 @@ import asyncio
 import os
 from logging.config import fileConfig
 
+from dotenv import load_dotenv
 from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from alembic import context
 from app.infra.db.models import Base
+
+# .env 를 먼저 읽는다. 이게 없으면 .env 에서 포트를 바꿔도 alembic 만
+# DEFAULT_URL 을 쓰게 되고, 앱과 마이그레이션이 서로 다른 DB 를 보게 된다.
+# override=False 이므로 이미 설정된 환경변수가 이긴다 (CI 에서 주입한 값 우선).
+load_dotenv(override=False)
 
 config = context.config
 
@@ -33,9 +39,11 @@ DEFAULT_URL = "postgresql+asyncpg://curtain:curtain@localhost:15432/curtain"
 
 
 def _url() -> str:
-    url = os.getenv("DATABASE_URL", DEFAULT_URL)
-    # .env 는 앱용 asyncpg URL 을 쓴다. alembic 도 async 로 돌리므로 그대로 사용.
-    return url
+    """DATABASE_URL (.env 또는 환경변수) → 없으면 docker-compose 기본값.
+
+    .env 는 앱용 asyncpg URL 을 쓴다. alembic 도 async 로 돌리므로 그대로 사용한다.
+    """
+    return os.getenv("DATABASE_URL", DEFAULT_URL)
 
 
 def _configure(connection: Connection | None = None, **extra: object) -> None:
