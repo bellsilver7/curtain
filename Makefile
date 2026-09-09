@@ -81,7 +81,7 @@ test-concurrency: check-deps up  ## 좌석 경합·데드락·총량 보존
 test-gate: check-deps up  ## 게이트 명세 5건
 	$(PYTEST) tests/test_seat_gate.py -q
 
-test-seatmap: check-deps up  ## 지금 작업 중인 것. 좌석맵 명세 7건
+test-seatmap: check-deps up  ## 좌석맵 조회와 캐시 7건
 	$(PYTEST) tests/test_seatmap.py -q
 
 load: check-deps up       ## 오픈런 부하 (검증 시나리오 마지막 두 줄)

@@ -26,3 +26,9 @@ load/reports/
 .idea/
 .vscode/
 .DS_Store
+
+# 편집기·Finder 가 만드는 사본. 원본과 동일한 파일이 커밋에 섞이는 것을 막는다
+* copy.py
+* copy *.py
+*.orig
+*.rej

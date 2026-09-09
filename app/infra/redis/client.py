@@ -103,6 +103,7 @@ class _Bundle:
 #: "attached to a different loop" 로 죽는다.
 _bundles: dict[tuple[str, int], _Bundle] = {}
 
+
 @dataclass(slots=True)
 class Gate:
     """게이트 획득 결과. 블록을 벗어날 때 keep() 안 했으면 반납된다."""
@@ -135,6 +136,36 @@ def _degrade(exc: BaseException | None = None, *, why: str = "") -> Gate:
     return Gate(acquired=True, degraded=True)
 
 
+def _new_client(url: str) -> Redis:
+    """커넥션 풀과 클라이언트를 만든다.
+
+    BlockingConnectionPool 을 반드시 쓴다. 이것이 이 파일에서 가장 중요한 한 줄이다.
+
+    기본 ConnectionPool 은 풀이 마르면 기다리지 않고 즉시 MaxConnectionsError 를
+    던진다. 그 예외는 호출부에서 fail-open 으로 처리되므로, 게이트가 필요한 바로
+    그 순간에 게이트가 사라진다.
+    (실측: 좌석 1석에 200 동시 요청 → 100건이 MaxConnectionsError 로 degraded.
+     redis-py 8 의 기본 상한이 100 이다.)
+
+    명령이 1ms 미만이므로 잠깐 기다려 커넥션을 재사용하는 쪽이 압도적으로 낫다.
+    Blocking 으로 바꾸면 같은 부하에서 degraded 0 건이다.
+
+    타임아웃과는 무관한 문제였다. 처음에는 접속 폭풍이 타임아웃을 유발한 것으로
+    오진했지만, 타임아웃을 0.25s 와 1.0s 로 바꿔도 결과는 같고 풀 종류만이 갈랐다.
+    타임아웃 값은 별개의 안전장치다.
+    """
+    pool = aioredis.BlockingConnectionPool.from_url(
+        url,
+        decode_responses=True,
+        max_connections=_MAX_CONNECTIONS,
+        timeout=_POOL_WAIT_SEC,
+        socket_timeout=_CMD_TIMEOUT_SEC,
+        socket_connect_timeout=_CONNECT_TIMEOUT_SEC,
+        health_check_interval=30,
+    )
+    return aioredis.Redis(connection_pool=pool)
+
+
 async def _bundle() -> _Bundle | None:
     """연결된 번들, 또는 Redis 에 닿지 못하면 None (fail-open).
 
@@ -148,33 +179,9 @@ async def _bundle() -> _Bundle | None:
         return bundle
 
     try:
-        # BlockingConnectionPool 을 반드시 쓴다. 이것이 이 파일에서 가장
-        # 중요한 한 줄이다.
-        #
-        # 기본 ConnectionPool 은 풀이 마르면 기다리지 않고 즉시
-        # MaxConnectionsError 를 던진다. 그 예외는 아래에서 fail-open 으로
-        # 처리되므로, 게이트가 필요한 바로 그 순간에 게이트가 사라진다.
-        # (실측: 좌석 1석에 200 동시 요청 → 100건이 MaxConnectionsError 로
-        #  degraded. redis-py 8 의 기본 상한이 100 이다.)
-        #
-        # 게이트 명령은 1ms 미만이므로, 잠깐 기다려 커넥션을 재사용하는 쪽이
-        # 압도적으로 낫다. Blocking 으로 바꾸면 같은 부하에서 degraded 0 건이다.
-        #
-        # 타임아웃과는 무관한 문제였다. 처음에는 접속 폭풍이 타임아웃을 유발한
-        # 것으로 오진했지만, 타임아웃을 0.25s ↔ 1.0s 로 바꿔도 결과는 같고
-        # 풀 종류만이 갈랐다. 아래 타임아웃 값은 별개의 안전장치다.
-        pool = aioredis.BlockingConnectionPool.from_url(
-            url,
-            decode_responses=True,
-            max_connections=_MAX_CONNECTIONS,
-            timeout=_POOL_WAIT_SEC,
-            socket_timeout=_CMD_TIMEOUT_SEC,
-            socket_connect_timeout=_CONNECT_TIMEOUT_SEC,
-            health_check_interval=30,
-        )
-        client: Redis = aioredis.Redis(connection_pool=pool)
+        client = _new_client(url)
         # register_script 는 EVALSHA 를 쓰고 NOSCRIPT 면 알아서 EVAL 로 재시도한다.
-        # SHA 를 직접 들고 다니거나 Redis 에 저장하면 SCRIPT FLUSH · 서버 재시작 ·
+        # SHA 를 직접 들고 다니거나 Redis 에 저장하면 SCRIPT FLUSH, 서버 재시작,
         # 새 인스턴스 투입 때 NOSCRIPT 로 깨진다.
         bundle = _Bundle(
             client=client,
@@ -186,6 +193,17 @@ async def _bundle() -> _Bundle | None:
 
     _bundles[key] = bundle
     return bundle
+
+
+async def connection() -> Redis | None:
+    """게이트와 같은 커넥션 풀을 공유하는 클라이언트, 또는 닿지 못하면 None.
+
+    좌석맵 캐시처럼 Redis 를 쓰는 다른 계층이 자기 풀을 따로 만들면, 커넥션
+    수가 두 배가 되고 close_all() 로 정리되지 않아 테스트가 죽은 이벤트 루프에
+    묶인 커넥션을 물려받는다. 하나만 두고 나눠 쓴다.
+    """
+    bundle = await _bundle()
+    return bundle.client if bundle is not None else None
 
 
 def _keys(schedule_id: int, seat_ids: Sequence[int]) -> list[str]:
