@@ -12,11 +12,26 @@
 -- 실패한 인덱스를 돌려주는 이유: 어느 좌석이 막혔는지 클라이언트에게 알려주려고
 -- DB 를 다시 조회하면, 게이트가 아껴준 왕복을 패자 수만큼 되토해낸다.
 -- 그 정보는 게이트가 이미 알고 있으므로 여기서 함께 반환한다.
+--
+-- 같은 토큰에 대해 멱등하다. 이미 내 토큰이 들어 있는 키는 내가 잡은 것으로
+-- 본다. 그래야 타임아웃 후 재시도가 안전하다 — 첫 시도가 실제로는 성공했는데
+-- 응답만 유실된 경우, 재시도가 "남이 잡았다"고 오판하고 자기 게이트를 지우면서
+-- 엉뚱한 409 를 내는 일이 없다.
 
 local acquired = {}
 
 for i = 1, #KEYS do
+  local mine = false
+
   if redis.call('SET', KEYS[i], ARGV[1], 'NX', 'PX', ARGV[2]) then
+    mine = true
+  elseif redis.call('GET', KEYS[i]) == ARGV[1] then
+    -- 내가 이미 들고 있는 키. TTL 을 새로 밀어준다.
+    redis.call('PEXPIRE', KEYS[i], ARGV[2])
+    mine = true
+  end
+
+  if mine then
     acquired[#acquired + 1] = KEYS[i]
   else
     -- 부분 획득 되돌리기. 내가 쓴 값일 때만 지운다 —

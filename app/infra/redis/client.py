@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections import Counter
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -50,13 +51,25 @@ _LUA_DIR = Path(__file__).parent / "lua"
 #: TTL 관계는 절대값이 아니라 비례 관계로 지켜야 한다.
 _GATE_TTL_RATIO = policy.SEAT_GATE_TTL / policy.HOLD_TTL
 
-#: 타임아웃 세 개. 게이트는 "빠르게 답하거나 빠진다"가 원칙이지만, 너무 조이면
-#: 부하가 몰릴 때 정상 동작이 장애로 오인되어 fail-open 이 남발된다.
-#: 아래 값은 상한이지 목표가 아니다 — 정상 응답은 1ms 미만이다.
-_CONNECT_TIMEOUT_SEC = float(os.getenv("REDIS_CONNECT_TIMEOUT_SEC", "1.0"))
-_CMD_TIMEOUT_SEC = float(os.getenv("REDIS_CMD_TIMEOUT_SEC", "0.5"))
-#: 풀에서 커넥션을 기다리는 상한. 명령이 1ms 미만이므로 대기는 거의 없다.
-_POOL_WAIT_SEC = float(os.getenv("REDIS_POOL_WAIT_SEC", "1.0"))
+#: 타임아웃과 풀 크기.
+#:
+#: 여기서 "빠르게 포기"하면 안 된다. 게이트가 포기하면 fail-open 으로 요청이
+#: DB 로 흘러가고, 그건 게이트가 필요한 순간에 게이트가 사라지는 것이다.
+#: 게이트 슬롯을 몇 초 기다리는 비용은 DB 에 200요청을 흘리는 비용보다 훨씬 싸다.
+#:
+#: 값이 넉넉한 이유는 환경 차이다. 리눅스 네이티브 Redis 는 왕복이 1ms 미만이지만,
+#: macOS Docker Desktop 의 포트 포워딩은 커넥션 수립이 수백 ms 걸린다.
+#: 좁게 잡으면 개발 머신에서만 degrade 가 발생해 원인을 찾기 어렵다.
+_CONNECT_TIMEOUT_SEC = float(os.getenv("REDIS_CONNECT_TIMEOUT_SEC", "5.0"))
+_CMD_TIMEOUT_SEC = float(os.getenv("REDIS_CMD_TIMEOUT_SEC", "3.0"))
+#: 풀에서 커넥션을 기다리는 상한.
+_POOL_WAIT_SEC = float(os.getenv("REDIS_POOL_WAIT_SEC", "5.0"))
+#: 커넥션 수. 적게 유지하는 편이 낫다 — 명령은 1ms 급이라 재사용이 빠르고,
+#: 수립 비용이 비싼 환경에서는 커넥션을 적게 만드는 것이 곧 지연 감소다.
+_MAX_CONNECTIONS = int(os.getenv("REDIS_MAX_CONNECTIONS", "24"))
+#: 타임아웃은 "바쁘다"이고 "죽었다"가 아니다. 한 번은 다시 물어본다.
+#: seat_gate.lua 가 같은 토큰에 멱등하므로 재시도가 안전하다.
+_RETRIES = int(os.getenv("REDIS_GATE_RETRIES", "1"))
 
 
 def redis_url() -> str:
@@ -90,6 +103,37 @@ class _Bundle:
 #: "attached to a different loop" 로 죽는다.
 _bundles: dict[tuple[str, int], _Bundle] = {}
 
+@dataclass(slots=True)
+class Gate:
+    """게이트 획득 결과. 블록을 벗어날 때 keep() 안 했으면 반납된다."""
+
+    acquired: bool
+    #: 게이트가 알려준 막힌 좌석. DB 를 다시 조회하지 않고 이 값을 응답에 쓴다.
+    blocked_seat_ids: tuple[int, ...] = ()
+    #: Redis 에 닿지 못해 게이트를 우회했는가. 정확성에는 영향이 없고, 관측용이다.
+    degraded: bool = False
+    _kept: bool = field(default=False, repr=False)
+
+    def keep(self) -> None:
+        """DB 확정까지 성공했을 때만 부른다. 게이트를 hold TTL 동안 유지한다."""
+        self._kept = True
+
+
+#: fail-open 이 왜 발동했는지 예외 이름별로 센다.
+#:
+#: "degraded 100건"만 보고 원인을 타임아웃으로 오진한 적이 있다. 실제로는
+#: MaxConnectionsError 였다. 이유 없는 degrade 집계는 오진을 부른다.
+degrade_reasons: Counter[str] = Counter()
+
+
+def reset_stats() -> None:
+    degrade_reasons.clear()
+
+
+def _degrade(exc: BaseException | None = None, *, why: str = "") -> Gate:
+    degrade_reasons[why or type(exc).__name__] += 1
+    return Gate(acquired=True, degraded=True)
+
 
 async def _bundle() -> _Bundle | None:
     """연결된 번들, 또는 Redis 에 닿지 못하면 None (fail-open).
@@ -122,7 +166,7 @@ async def _bundle() -> _Bundle | None:
         pool = aioredis.BlockingConnectionPool.from_url(
             url,
             decode_responses=True,
-            max_connections=int(os.getenv("REDIS_MAX_CONNECTIONS", "64")),
+            max_connections=_MAX_CONNECTIONS,
             timeout=_POOL_WAIT_SEC,
             socket_timeout=_CMD_TIMEOUT_SEC,
             socket_connect_timeout=_CONNECT_TIMEOUT_SEC,
@@ -160,22 +204,6 @@ def _token(user_id: int) -> str:
     return f"u:{user_id}"
 
 
-@dataclass(slots=True)
-class Gate:
-    """게이트 획득 결과. 블록을 벗어날 때 keep() 안 했으면 반납된다."""
-
-    acquired: bool
-    #: 게이트가 알려준 막힌 좌석. DB 를 다시 조회하지 않고 이 값을 응답에 쓴다.
-    blocked_seat_ids: tuple[int, ...] = ()
-    #: Redis 에 닿지 못해 게이트를 우회했는가. 정확성에는 영향이 없고, 관측용이다.
-    degraded: bool = False
-    _kept: bool = field(default=False, repr=False)
-
-    def keep(self) -> None:
-        """DB 확정까지 성공했을 때만 부른다. 게이트를 hold TTL 동안 유지한다."""
-        self._kept = True
-
-
 @asynccontextmanager
 async def hold_gate(
     *,
@@ -186,8 +214,8 @@ async def hold_gate(
 ) -> AsyncIterator[Gate]:
     """좌석 게이트를 잡고, keep() 하지 않으면 반납한다.
 
-    seat_ids 는 오름차순으로 정렬해서 넘긴다 — SQL 의 ORDER BY seat_id
-    FOR UPDATE 와 잠금 순서를 맞춰, 교차 요청이 게이트 단계에서 엇갈리지 않게.
+    seat_ids 는 오름차순으로 정렬해서 넘긴다 — SQL 의 ORDER BY seat_id FOR UPDATE
+    와 잠금 순서를 맞춰, 교차 요청이 게이트 단계에서 엇갈리지 않게.
 
     Redis 에 닿지 못하면 acquired=True, degraded=True 로 통과시킨다.
     정합성은 DB 가 지키므로 게이트를 건너뛰어도 오버부킹은 나지 않는다.
@@ -196,18 +224,27 @@ async def hold_gate(
     bundle = await _bundle()
 
     if bundle is None:
-        yield Gate(acquired=True, degraded=True)
+        yield _degrade(why="unreachable")
         return
 
     keys = _keys(schedule_id, ordered)
     token = _token(user_id)
     ttl_ms = max(1, int(hold_ttl_sec * _GATE_TTL_RATIO * 1000))
 
-    try:
-        blocked_index = int(await bundle.acquire(keys=keys, args=[token, ttl_ms]))  # type: ignore[operator]
-    except (RedisError, OSError):
-        # 획득 도중 장애 — 게이트 없이 진행한다. 남은 키는 TTL 이 알아서 지운다.
-        yield Gate(acquired=True, degraded=True)
+    blocked_index: int | None = None
+    last: BaseException | None = None
+    for _ in range(_RETRIES + 1):
+        try:
+            blocked_index = int(
+                await bundle.acquire(keys=keys, args=[token, ttl_ms])  # type: ignore[operator]
+            )
+            break
+        except (RedisError, OSError, asyncio.TimeoutError) as exc:
+            last = exc
+
+    if blocked_index is None:
+        # 재시도까지 실패 — 게이트 없이 진행한다. 남은 키는 TTL 이 알아서 지운다.
+        yield _degrade(last)
         return
 
     if blocked_index:

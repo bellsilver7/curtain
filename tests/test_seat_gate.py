@@ -1,4 +1,4 @@
-"""Redis 좌석 게이트 (설계 문서: Redis 좌석 게이트)
+"""Redis 좌석 게이트 — 아직 구현되지 않은 동작의 명세
 
 이 파일은 블랙박스 명세다. hold_service.acquire() / release() 의 겉보기
 동작만 검증하고, Redis 클라이언트 모듈이나 Lua 스크립트를 직접 import 하지
@@ -9,12 +9,13 @@
 것이다. Redis 를 통째로 날려도 오버부킹은 0건이어야 하고, 대신 Redis 가
 살아 있을 때는 패자들이 DB 에 도달하지 않아야 한다.
 
-다섯 건 중 test_gate_sheds_load_before_db 만이 게이트 없이는 통과하지 못하는
-드라이버다. 나머지 넷은 Postgres 만으로도 초록이었고, 게이트를 붙이면서
-망가뜨릴 수 있는 지점에 놓아둔 함정이다. 초록으로 시작해 초록으로 끝난 테스트는
-아무것도 증명하지 않으므로, 구현 후 일부러 깨뜨려 실제로 빨강이 되는지 확인했다.
-그 과정에서 이 파일의 초기 버전이 (2) 경로를 전혀 검증하지 않는 것을 발견했다 —
-test_gate_released_when_db_rejects 의 주석 참고.
+구현 전 기대 상태:
+  - test_gate_sheds_load_before_db  → 빨강 (유일하게 새 동작을 요구한다)
+  - 나머지 4건                      → 초록 (Postgres 만으로 이미 맞으므로)
+
+뒤의 4건은 드라이버가 아니라 함정이다. 게이트를 붙이면서 망가뜨릴 수 있는
+지점에 미리 놓아둔 것이므로, 구현 후에 일부러 깨보고 실제로 빨강이 되는지
+확인해야 한다. 초록으로 시작해 초록으로 끝난 테스트는 아무것도 증명하지 않는다.
 """
 
 from __future__ import annotations
@@ -35,6 +36,18 @@ from tests.conftest import CONCURRENCY, Seeded, SqlSpy, status_counts, try_hold
 pytestmark = pytest.mark.integration
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:16379/0")
+
+
+def _degrade_reasons() -> dict[str, int]:
+    """진단용. 게이트가 fail-open 으로 빠진 이유를 예외 이름별로 돌려준다.
+
+    이 파일은 블랙박스 명세지만, 이것만은 클라이언트를 들여다본다.
+    "degraded 100건"만 보고 원인을 타임아웃으로 오진한 적이 있어서다.
+    단정(assert)에는 쓰지 않고 실패 메시지에만 쓴다.
+    """
+    from app.infra.redis import client as gate_client
+
+    return dict(gate_client.degrade_reasons)
 
 #: 아무도 듣지 않는 포트. 진짜 connection refused 를 타게 하려는 것이다.
 #: 플래그로 게이트를 우회하면 "장애 경로"가 아니라 "분기 하나"를 테스트하게 된다.
@@ -83,6 +96,7 @@ async def test_gate_sheds_load_before_db(
     assert locking == 1, (
         f"잠금 쿼리가 {locking}회 실행됐다 (기대 1회). "
         f"패자들이 게이트에서 걸러지지 않고 DB 행 잠금까지 내려왔다는 뜻이다.\n"
+        f"게이트가 포기한 이유: {_degrade_reasons() or '없음 (게이트가 DB 뒤에 있는지 확인)'}\n"
         f"{sql_spy.dump()}"
     )
     assert touching <= 3, (
