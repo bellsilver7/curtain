@@ -1,0 +1,30 @@
+# 로컬 개발용. 프로덕션 설정 아님.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: curtain
+      POSTGRES_PASSWORD: curtain
+      POSTGRES_DB: curtain
+    ports: ["5432:5432"]
+    # 동시성 테스트에서 커넥션이 부족하면 원인 파악이 어려워진다. 넉넉하게.
+    command: >
+      postgres -c max_connections=300
+               -c log_lock_waits=on
+               -c deadlock_timeout=200ms
+               -c log_min_duration_statement=200ms
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U curtain"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+    command: redis-server --appendonly no --save ""
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
