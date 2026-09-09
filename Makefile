@@ -1,4 +1,4 @@
-.PHONY: up down migrate api worker test test-unit test-concurrency load lint fmt
+.PHONY: up down migrate revision migrate-down migrate-sql drift api worker test test-unit test-concurrency load lint fmt
 
 up:            ## 로컬 postgres + redis 기동
 	docker compose up -d --wait
@@ -6,8 +6,21 @@ up:            ## 로컬 postgres + redis 기동
 down:
 	docker compose down -v
 
-migrate: up    ## 스키마 적용
-	docker compose exec -T postgres psql -U curtain -d curtain < migrations/0001_init.sql
+migrate: up    ## 스키마 적용 (최신 리비전까지)
+	alembic upgrade head
+
+revision:      ## 모델 변경 후 리비전 생성. 생성물은 반드시 읽고 손볼 것 (ADR 0002)
+	@test -n "$(m)" || (echo 'usage: make revision m="설명"'; exit 1)
+	alembic revision --autogenerate -m "$(m)"
+
+migrate-down:  ## 한 단계 되돌리기
+	alembic downgrade -1
+
+migrate-sql:   ## DB에 대지 않고 SQL만 출력 (리뷰용)
+	alembic upgrade head --sql
+
+drift: up      ## 모델과 DB가 어긋났는지 확인. CI에 걸어두면 좋다
+	alembic check
 
 api:
 	uvicorn app.main:app --reload --port 8000

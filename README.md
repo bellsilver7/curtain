@@ -36,6 +36,9 @@ make worker      # 배치 워커 4종 (별도 터미널)
 
 | 명령 | 하는 일 |
 |---|---|
+| `make migrate` | 최신 리비전까지 스키마 적용 |
+| `make revision m="설명"` | 모델 변경 후 리비전 생성 (생성물은 꼭 읽어볼 것) |
+| `make drift` | 모델과 DB가 어긋났는지 확인 |
 | `make test-unit` | DB 없이 도는 도메인 테스트만. 지금 통과한다 |
 | `make test` | 전체. `docs/design.md` §10 표를 그대로 실행한다 |
 | `make test-concurrency` | 2주차의 진짜 산출물 — 좌석 경합·데드락·총량 보존 |
@@ -61,7 +64,8 @@ app/
 초기 커밋 시점의 스캐폴드다. 실제로 동작하는 것은 아래뿐이다.
 
 - [x] 설계 문서 (`docs/design.md`) · 결정 기록 (`docs/adr/`)
-- [x] 스키마 (`migrations/0001_init.sql`)
+- [x] 스키마 — 모델(`app/infra/db/models.py`) + Alembic 리비전 `0001`
+      (upgrade → `alembic check` 드리프트 없음 → downgrade 왕복까지 검증 완료)
 - [x] 정책 상수와 취소 수수료 계산 (`app/domain/policy.py`) — `make test-unit` 통과
 - [x] Redis 좌석 게이트 Lua (`app/infra/redis/lua/seat_gate.lua`)
 - [ ] 1주차 — 재고 골격: 좌석 전개 · 좌석맵 조회 + ETag 캐시

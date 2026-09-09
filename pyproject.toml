@@ -7,6 +7,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
     "sqlalchemy>=2.0.36",
+    "alembic>=1.14",
     "asyncpg>=0.30",
     "redis>=5.2",
     "pydantic>=2.9",

@@ -118,7 +118,11 @@ schedules (3 회차)          seats (1,200석, 공연장 고정)
 한 좌석 = 정확히 한 행. "재고 수량" 컬럼이 없으므로 감산 경쟁도 없다. 오버부킹은 "숫자를
 잘못 뺀 버그"가 아니라 **유니크 제약 위반**이 되어 DB가 거절한다.
 
-전체 DDL은 [`migrations/0001_init.sql`](../migrations/0001_init.sql)에 있다. 핵심만 옮기면:
+스키마의 단일 원천은 [`app/infra/db/models.py`](../app/infra/db/models.py)이고, DDL은
+Alembic 이 그 모델에서 생성한다 ([`migrations/versions/`](../migrations/versions/)).
+부분 인덱스·커버링 인덱스·CHECK 는 모델에서 그대로 표현되지만 ENUM 은 수동 보정이
+필요하다 — 이유와 검증 결과는 [ADR 0002](adr/0002-migrations.md)에 있다.
+아래는 생성되는 DDL 중 핵심만 옮긴 것이다.
 
 ```sql
 CREATE TYPE seat_status AS ENUM ('AVAILABLE', 'HELD', 'BOOKED');
@@ -138,7 +142,7 @@ CREATE TABLE schedule_seats (
   CONSTRAINT uq_schedule_seat UNIQUE (schedule_id, seat_id),
 
   -- HELD 상태와 hold 메타데이터가 어긋난 행은 DB가 애초에 받지 않는다.
-  CONSTRAINT ck_hold_shape CHECK (
+  CONSTRAINT ck_schedule_seats_hold_shape CHECK (
        (status =  'HELD' AND held_by IS NOT NULL AND hold_expires_at IS NOT NULL)
     OR (status <> 'HELD' AND held_by IS NULL     AND hold_expires_at IS NULL)
   )
@@ -534,7 +538,7 @@ curtain/
 │  ├─ service/        # 유스케이스 조립. 트랜잭션 경계가 여기 있다
 │  ├─ infra/          # db · redis · pg 어댑터 (FakePG 포함)
 │  └─ worker/         # hold_sweeper · queue_admitter · order_reconciler · outbox_publisher
-├─ migrations/        # 0001_init.sql
+├─ migrations/        # Alembic. env.py + versions/
 ├─ tests/             # test_seat_domain · test_concurrency · test_saga
 └─ load/              # locustfile.py
 ```
