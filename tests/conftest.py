@@ -17,10 +17,13 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
+import redis.asyncio as aioredis
 import sqlalchemy as sa
+from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.infra.db.engine import build_engine
+from app.infra.redis import client as gate_client
 from app.service import schedule_service
 from app.service.schedule_service import DEMO_HALL, VenueLayout
 
@@ -124,12 +127,37 @@ async def sql_spy(engine: AsyncEngine) -> AsyncIterator[SqlSpy]:
 
 
 @pytest_asyncio.fixture
-async def clean_db(engine: AsyncEngine) -> AsyncIterator[None]:
+async def clean_stores(engine: AsyncEngine) -> AsyncIterator[None]:
+    """Postgres 와 Redis 를 **둘 다** 비운다.
+
+    Postgres 만 비우면 게이트 키가 다음 테스트로 샌다. 게이트 TTL 은 수백 초라
+    TRUNCATE 로 좌석이 비워져도 Redis 는 여전히 그 좌석을 막고 있고, 그러면
+    다음 테스트가 첫 선점부터 실패한다 — 진단하기 나쁜 실패다.
+
+    게이트 클라이언트 캐시도 비운다. 캐시는 (URL, 이벤트 루프)로 키를 잡는데,
+    pytest-asyncio 가 테스트마다 루프를 새로 만들므로 남겨두면 죽은 루프에
+    묶인 커넥션을 물려받는다.
+    """
+    await gate_client.close_all()
+
     async with engine.begin() as conn:
         await conn.execute(
             sa.text(f"TRUNCATE {', '.join(_ALL_TABLES)} RESTART IDENTITY CASCADE")
         )
-    yield
+
+    redis = aioredis.from_url(os.getenv("REDIS_URL", "redis://localhost:16379/0"))
+    try:
+        await redis.flushall()
+    except RedisError:
+        # Redis 없이 도는 것도 정상이다 (fail-open 검증). 비울 것도 없다.
+        pass
+    finally:
+        await redis.aclose()
+
+    try:
+        yield
+    finally:
+        await gate_client.close_all()
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +178,7 @@ class Seeded:
 
 
 @pytest_asyncio.fixture
-async def seeded(engine: AsyncEngine, clean_db: None) -> Seeded:
+async def seeded(engine: AsyncEngine, clean_stores: None) -> Seeded:
     """1,200석 공연장 · 회차 3개 · 재고 3,600행 · 사용자 CONCURRENCY+10 명.
 
     설계 문서가 가정하는 규모를 그대로 재현한다. 총량 보존 불변식이
