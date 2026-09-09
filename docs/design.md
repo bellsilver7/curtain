@@ -285,7 +285,7 @@ RETURNING s.seat_id, s.price, s.hold_expires_at;
 > 다만 **같은 CTE 안의 구매 한도 판정은 샜다.** 한 유저의 12개 동시 요청 중 7건이
 > 성공했다(한도 4매). 좌석은 행 잠금이 직렬화하지만, 한도는 "몇 석 갖고 있나"라는
 > 술어라서 잠글 행이 없다(phantom → write skew). (회차, 사용자) 어드바이저리 락을
-> `HOLD_SEATS` 직전에 잡아 해결했다 — 근거와 대안 비교는 [ADR 0003](adr/0003-quota-advisory-lock.md).
+> `hold_seats` 직전에 잡아 해결했다 — 근거와 대안 비교는 [ADR 0003](adr/0003-quota-advisory-lock.md).
 
 > **검증할 것**
 > CTE 안의 `ORDER BY … FOR UPDATE`가 실제로 그 순서대로 잠근다는 보장은 실행 계획에 달려

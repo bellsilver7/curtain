@@ -64,18 +64,17 @@ async def create_venue(conn: AsyncConnection, layout: VenueLayout) -> int:
     """공연장과 물리 좌석을 만든다. 좌석은 회차와 무관하게 한 번만 만들어진다."""
     venue_id: int = (
         await conn.execute(
-            queries.INSERT_VENUE, {"name": layout.name, "address": layout.address}
+            queries.insert_venue(name=layout.name, address=layout.address)
         )
     ).scalar_one()
 
     await conn.execute(
-        queries.CREATE_VENUE_SEATS,
-        {
-            "venue_id": venue_id,
-            "zones": [r.zone for r in layout.rows],
-            "row_labels": [r.row_label for r in layout.rows],
-            "widths": [r.width for r in layout.rows],
-        },
+        queries.create_venue_seats(
+            venue_id=venue_id,
+            zones=[r.zone for r in layout.rows],
+            row_labels=[r.row_label for r in layout.rows],
+            widths=[r.width for r in layout.rows],
+        )
     )
     return venue_id
 
@@ -89,14 +88,13 @@ async def expand_schedule_seats(
     돌려준다. 회차 오픈 처리가 재시도되어도 재고가 늘어나지 않는다.
     """
     result = await conn.execute(
-        queries.EXPAND_SCHEDULE_SEATS,
-        {
-            "schedule_id": schedule_id,
-            "venue_id": venue_id,
-            "zones": [r.zone for r in layout.rows],
-            "row_labels": [r.row_label for r in layout.rows],
-            "grades": [r.grade for r in layout.rows],
-            "prices": [r.price for r in layout.rows],
-        },
+        queries.expand_schedule_seats(
+            schedule_id=schedule_id,
+            venue_id=venue_id,
+            zones=[r.zone for r in layout.rows],
+            row_labels=[r.row_label for r in layout.rows],
+            grades=[r.grade for r in layout.rows],
+            prices=[r.price for r in layout.rows],
+        )
     )
     return len(result.fetchall())

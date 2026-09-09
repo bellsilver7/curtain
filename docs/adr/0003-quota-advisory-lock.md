@@ -2,7 +2,7 @@
 
 - 상태: 채택
 - 날짜: 2026-09-09
-- 관련: 설계 문서 §1.1, §5.2, `app/infra/db/queries.py`(`LOCK_USER_QUOTA`)
+- 관련: 설계 문서: 좌석 선점, `app/infra/db/queries.py`(`lock_user_quota`)
 
 ## 맥락
 
@@ -39,7 +39,7 @@
 
 ## 결정
 
-`HOLD_SEATS` 직전, 같은 트랜잭션에서
+`hold_seats` 직전, 같은 트랜잭션에서
 
 ```sql
 SELECT pg_advisory_xact_lock(hashtext('curtain.hold:' || schedule_id || ':' || user_id)::bigint)

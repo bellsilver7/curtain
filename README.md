@@ -72,7 +72,7 @@ app/
 
 초기 커밋 시점의 스캐폴드다. 실제로 동작하는 것은 아래뿐이다.
 
-- [x] 설계 문서 (`docs/design.md`) · 결정 기록 (`docs/adr/` 3건)
+- [x] 설계 문서 (`docs/design.md`) · 결정 기록 (`docs/adr/` 4건)
 - [x] 스키마 — 모델(`app/infra/db/models.py`) + Alembic 리비전 `0001`
 - [x] 정책 상수와 취소 수수료 (`app/domain/policy.py`), 상태 전이 규칙 (`app/domain/seat.py`)
 - [x] 좌석 전개 (`app/service/schedule_service.py`) — 1,200석 × 3회차, 멱등
@@ -82,17 +82,19 @@ app/
 - [x] **동시성 테스트 통과** — 아래 참고
 - [x] **Redis 좌석 게이트** — DB 앞단에서 패자를 걸러낸다. Redis 를 날려도 오버부킹 0건
 - [x] 좌석맵 조회 + 3초 캐시 — 두 번째 조회는 DB 미접근, 스탬피드 차단
+- [x] 쿼리를 SQLAlchemy Core 표현식으로 — 잠금 절과 실행 계획은 테스트가 지킨다
+      ([ADR 0004](docs/adr/0004-query-style.md))
 - [ ] 결제 사가: FakePG · 확정 트랜잭션 · 리컨실러 · 멱등 3겹
 - [ ] 대기열: ZSET 큐 · 입장 허용기 · locust
 
 ### 지금 통과하는 것
 
-`make test` → 16건. Postgres 16 에 실제 동시 요청을 던져 확인했다.
+`make test` → 37건. Postgres 16 에 실제 동시 요청을 던져 확인했다.
 
 | 시나리오 | 결과 |
 |---|---|
 | 같은 좌석 1석에 동시 200 요청 | 성공 1건, 나머지 409, `HELD` 행 1개 |
-| `[A,B]` / `[B,A]` 교차 요청 240건 | 데드락 0건 — §5.2 잠금 순서 가정 유효 |
+| `[A,B]` / `[B,A]` 교차 요청 240건 | 데드락 0건 — 잠금 순서 가정 유효 |
 | 4석 중 1석 선점된 상태에서 4석 요청 | 전체 실패, 쓰레기 hold 0건 |
 | 한 유저 12개 동시 요청 | 성공 4건 (한도 준수) — [ADR 0003](docs/adr/0003-quota-advisory-lock.md) |
 | 만료 hold | 선점 쿼리가 즉시 회수 / `hold_sweeper` 도 회수 |
@@ -104,6 +106,8 @@ app/
 | 좌석맵: 콜드 캐시에 200 동시 조회 | DB 쿼리 1회 (락 없으면 200회) |
 | 좌석맵: TTL 경과 후 | 새 좌석 상태로 수렴 |
 | 좌석맵: Redis 없음 | 매번 DB 로 가지만 내용은 정확 |
+| 잠금 절 | 선점 `ORDER BY … FOR UPDATE`, 스윕 `SKIP LOCKED`, `guard` 절이 사라지면 빨개진다 |
+| 만료 스윕 실행 계획 | `ix_hold_expiry` 부분 인덱스 사용 — [ADR 0004](docs/adr/0004-query-style.md) |
 
 ## 다음 한 걸음
 

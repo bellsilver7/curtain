@@ -17,11 +17,13 @@
 **Alembic 을 쓰고, `app/infra/db/models.py` 의 SQLAlchemy 모델을 스키마의 단일
 원천으로 삼는다.** 리비전은 `alembic revision --autogenerate` 로 뽑는다.
 
-모델을 두더라도 **쿼리는 ORM 을 거치지 않는다.** 선점·스윕·확정 SQL은 여전히
-`app/infra/db/queries.py` 의 raw SQL이다 (§5.2, §5.4, §7.1). 그 쿼리들의 정확한
-형태가 곧 설계이고, ORM 으로 감싸면 `FOR UPDATE SKIP LOCKED` 나 CTE 안의
-`guard` 절 같은 것이 흐려진다. 모델의 역할은 두 개다 — autogenerate 의 diff 대상,
-그리고 스키마 문서.
+모델을 두더라도 **ORM 세션은 쓰지 않는다.** 실행은 전부 Core 이고, 모델의 역할은
+autogenerate 의 diff 대상과 스키마 문서다.
+
+> **수정됨 (결정 기록: 쿼리 작성 방식).** 이 결정의 원문은 "쿼리는 문자열 SQL 로
+> 둔다"였다. 잠금 절을 눈으로 읽는 것보다 테스트로 지키는 편이 낫고, 문자열은
+> 스키마와 어긋나도 조용하다는 것이 드러나서 Core 표현식으로 옮겼다. ORM 세션을
+> 쓰지 않는다는 부분은 그대로다.
 
 ## 검증한 것
 

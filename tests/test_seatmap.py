@@ -37,7 +37,7 @@ pytestmark = pytest.mark.integration
 DEAD_REDIS_URL = "redis://127.0.0.1:1/0"
 
 #: SEATMAP 쿼리를 SqlSpy 에서 식별하는 조각. 다른 쿼리에는 없다.
-SEATMAP_SQL = "JOIN seats s ON s.id = ss.seat_id"
+SEATMAP_SQL = "JOIN seats AS s ON s.id = ss.seat_id"
 
 
 def _service() -> Any:

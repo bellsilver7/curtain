@@ -107,24 +107,22 @@ async def acquire(
             raise HoldRejected(list(gate.blocked_seat_ids))
 
         # 구매 한도는 "몇 석 갖고 있나"라는 술어이고, 행 잠금으로는 지킬 수 없다.
-        # 같은 (회차, 사용자)의 동시 요청만 직렬화한다 — LOCK_USER_QUOTA 주석 참고.
+        # 같은 (회차, 사용자)의 동시 요청만 직렬화한다 — lock_user_quota 주석 참고.
         # 별도 문장인 이유: 한 문장 안의 CTE 실행 순서는 보장되지 않으므로,
         # 락이 owned 절보다 먼저 잡힌다는 것을 SQL 로 표현할 방법이 없다.
         await conn.execute(
-            queries.LOCK_USER_QUOTA,
-            {"quota_key": f"curtain.hold:{schedule_id}:{user_id}"},
+            queries.lock_user_quota(quota_key=f"curtain.hold:{schedule_id}:{user_id}")
         )
 
         rows = (
             await conn.execute(
-                queries.HOLD_SEATS,
-                {
-                    "schedule_id": schedule_id,
-                    "user_id": user_id,
-                    "seat_ids": list(seat_ids),
-                    "max_seats": max_seats,
-                    "hold_ttl_sec": ttl_sec,
-                },
+                queries.hold_seats(
+                    schedule_id=schedule_id,
+                    user_id=user_id,
+                    seat_ids=seat_ids,
+                    max_seats=max_seats,
+                    hold_ttl_sec=ttl_sec,
+                )
             )
         ).mappings().all()
 
@@ -136,8 +134,9 @@ async def acquire(
                 r.seat_id
                 for r in (
                     await conn.execute(
-                        queries.FIND_UNAVAILABLE_SEATS,
-                        {"schedule_id": schedule_id, "seat_ids": list(seat_ids)},
+                        queries.find_unavailable_seats(
+                            schedule_id=schedule_id, seat_ids=seat_ids
+                        )
                     )
                 ).mappings()
             ]
@@ -147,11 +146,11 @@ async def acquire(
             raise QuotaExceeded([])
 
         # guard 가 통과했으면 전량이다. 그래도 확인한다 — 이 assert 가 깨지면
-        # HOLD_SEATS 가 설계와 다르게 동작한다는 뜻이고, 조용히 넘어가면 안 된다.
+        # hold_seats 가 설계와 다르게 동작한다는 뜻이고, 조용히 넘어가면 안 된다.
         if len(rows) != len(seat_ids):
             raise AssertionError(
                 f"부분 선점 발생: 요청 {len(seat_ids)}석 중 {len(rows)}석. "
-                f"HOLD_SEATS 의 guard 절 확인 필요"
+                f"hold_seats 의 guard 절 확인 필요"
             )
 
         # 남은 창: 호출자의 트랜잭션이 이 뒤에 롤백되면 DB hold 는 사라지지만
@@ -175,8 +174,9 @@ async def release(
 ) -> list[int]:
     """본인 hold 해제. 반환값은 실제로 풀린 좌석 — 이미 만료된 것은 포함되지 않는다."""
     result = await conn.execute(
-        queries.RELEASE_HOLD,
-        {"schedule_id": schedule_id, "user_id": user_id, "seat_ids": list(seat_ids)},
+        queries.release_hold(
+            schedule_id=schedule_id, user_id=user_id, seat_ids=seat_ids
+        )
     )
     released = [r.seat_id for r in result.mappings()]
 
@@ -194,5 +194,5 @@ async def sweep_expired(conn: AsyncConnection, *, batch: int = 500) -> list[tupl
 
     반환값 (schedule_id, seat_id) 목록은 좌석맵 캐시 무효화 대상이다.
     """
-    result = await conn.execute(queries.SWEEP_EXPIRED_HOLDS, {"batch": batch})
+    result = await conn.execute(queries.sweep_expired_holds(batch=batch))
     return [(r.schedule_id, r.seat_id) for r in result.mappings()]

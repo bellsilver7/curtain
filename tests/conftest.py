@@ -312,7 +312,7 @@ async def status_counts(engine: AsyncEngine, schedule_id: int) -> dict[str, int]
 
     async with engine.connect() as conn:
         rows = (
-            await conn.execute(queries.SEAT_STATUS_COUNTS, {"schedule_id": schedule_id})
+            await conn.execute(queries.seat_status_counts(schedule_id=schedule_id))
         ).mappings()
         return {r["status"]: r["n"] for r in rows}
 

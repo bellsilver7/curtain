@@ -41,13 +41,22 @@
 
 트랜잭션 경계는 `app/service/` 에 있다. 쿼리는 트랜잭션을 열지 않는다.
 
-## SQL 은 ORM 으로 감싸지 않는다
+## 쿼리는 Core 표현식, 세션은 쓰지 않는다
 
-선점·스윕·확정 쿼리는 `app/infra/db/queries.py` 의 raw SQL 이다. 그 쿼리들의
-정확한 형태가 곧 설계다 — `FOR UPDATE SKIP LOCKED`, CTE 의 `guard` 절,
-조건부 `WHERE` 는 ORM 이 가리면 리뷰에서 보이지 않는다.
+쿼리는 `app/infra/db/queries.py` 의 SQLAlchemy Core 표현식이고, 상수가 아니라
+값을 키워드 인자로 받는 함수다. 모델의 컬럼과 제약 이름을 직접 참조하므로
+스키마와 어긋나면 import 시점에 깨진다.
 
-모델(`app/infra/db/models.py`)은 스키마 정의와 마이그레이션 diff 전용이다.
+ORM 세션은 쓰지 않는다. 모델(`app/infra/db/models.py`)은 스키마 정의,
+마이그레이션 diff, 그리고 쿼리가 참조할 컬럼 이름표까지가 역할이다.
+
+두 가지는 반드시 지킨다 (근거는 결정 기록: 쿼리 작성 방식).
+
+- **좌석 상태는 리터럴로 박는다.** 바인드 파라미터로 넘기면 부분 인덱스
+  `ix_hold_expiry` 가 매칭되지 않고 Seq Scan 이 된다. 실측했다.
+- **잠금 절은 `tests/test_queries.py` 가 지킨다.** `FOR UPDATE`,
+  `SKIP LOCKED`, `guard` 절이 사라지는 변경은 반드시 빨개져야 한다.
+  새 쿼리를 추가하면 `_every_statement()` 목록에도 넣는다.
 
 ## 마이그레이션
 

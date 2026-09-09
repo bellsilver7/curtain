@@ -179,7 +179,7 @@ async def _read_db(engine: AsyncEngine, schedule_id: int) -> list[list[Any]]:
     같게 두면, 두 경로가 서로 다른 결과를 주는 종류의 버그가 사라진다.
     """
     async with engine.connect() as conn:
-        result = await conn.execute(queries.SEATMAP, {"schedule_id": schedule_id})
+        result = await conn.execute(queries.seatmap(schedule_id=schedule_id))
         return [
             [r.seat_id, r.zone, r.row_label, r.col_no, r.grade, r.price, str(r.status)]
             for r in result.mappings()
