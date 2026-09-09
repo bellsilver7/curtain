@@ -13,57 +13,15 @@ from collections import Counter
 
 import pytest
 import sqlalchemy as sa
-from asyncpg.exceptions import DeadlockDetectedError
-from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.domain import policy
-from app.infra.db import queries
 from app.infra.db.engine import tx
 from app.service import hold_service
-from app.service.hold_service import HoldRejected, QuotaExceeded
-from tests.conftest import CONCURRENCY, Seeded
+from app.service.hold_service import HoldRejected
+from tests.conftest import CONCURRENCY, Seeded, status_counts, try_hold
 
 pytestmark = pytest.mark.integration
-
-
-# ─────────────────────────────────────────────────────────────── 헬퍼
-
-
-async def _try_hold(
-    engine: AsyncEngine, *, schedule_id: int, user_id: int, seat_ids: list[int], **kw: object
-) -> str:
-    """선점을 한 번 시도하고 결과를 문자열로 분류한다.
-
-    예외를 삼키지 않고 분류만 하는 이유: 200개 요청 중 몇 개가 어떤 이유로
-    실패했는지가 이 테스트의 측정 대상이기 때문이다.
-    """
-    try:
-        async with tx(engine) as conn:
-            await hold_service.acquire(
-                conn,
-                schedule_id=schedule_id,
-                user_id=user_id,
-                seat_ids=seat_ids,
-                **kw,  # type: ignore[arg-type]
-            )
-        return "ok"
-    except QuotaExceeded:
-        return "quota"
-    except HoldRejected:
-        return "taken"
-    except DBAPIError as exc:
-        if isinstance(exc.orig, DeadlockDetectedError):
-            return "deadlock"
-        raise
-
-
-async def _status_counts(engine: AsyncEngine, schedule_id: int) -> dict[str, int]:
-    async with engine.connect() as conn:
-        rows = (
-            await conn.execute(queries.SEAT_STATUS_COUNTS, {"schedule_id": schedule_id})
-        ).mappings()
-        return {r["status"]: r["n"] for r in rows}
 
 
 # ─────────────────────────────────────────────────────── 검증 시나리오
@@ -79,7 +37,7 @@ async def test_single_seat_contention(engine: AsyncEngine, seeded: Seeded) -> No
     results = Counter(
         await asyncio.gather(
             *(
-                _try_hold(
+                try_hold(
                     engine,
                     schedule_id=seeded.schedule_id,
                     user_id=seeded.user_ids[i],
@@ -94,7 +52,7 @@ async def test_single_seat_contention(engine: AsyncEngine, seeded: Seeded) -> No
     assert results["ok"] == 1, f"성공이 1건이 아님: {results}"
     assert results["taken"] == CONCURRENCY - 1, f"거절 수가 안 맞음: {results}"
 
-    counts = await _status_counts(engine, seeded.schedule_id)
+    counts = await status_counts(engine, seeded.schedule_id)
     assert counts.get("HELD") == 1, counts
     assert counts.get("AVAILABLE") == 1199, counts
 
@@ -123,7 +81,7 @@ async def test_no_partial_success(engine: AsyncEngine, seeded: Seeded) -> None:
     assert exc.value.unavailable_seat_ids == [c]
 
     # a, b, d 는 손대지 않은 상태여야 한다.
-    counts = await _status_counts(engine, seeded.schedule_id)
+    counts = await status_counts(engine, seeded.schedule_id)
     assert counts.get("HELD") == 1, f"쓰레기 hold 가 남았다: {counts}"
 
 
@@ -141,10 +99,10 @@ async def test_cross_seat_deadlock(engine: AsyncEngine, seeded: Seeded) -> None:
         u1, u2 = seeded.user_ids[i % len(seeded.user_ids)], seeded.user_ids[-(i + 1)]
         # 같은 두 좌석을 서로 반대 순서로 요청한다.
         tasks.append(
-            _try_hold(engine, schedule_id=seeded.schedule_id, user_id=u1, seat_ids=[a, b])
+            try_hold(engine, schedule_id=seeded.schedule_id, user_id=u1, seat_ids=[a, b])
         )
         tasks.append(
-            _try_hold(engine, schedule_id=seeded.schedule_id, user_id=u2, seat_ids=[b, a])
+            try_hold(engine, schedule_id=seeded.schedule_id, user_id=u2, seat_ids=[b, a])
         )
 
     results = Counter(await asyncio.gather(*tasks))
@@ -153,7 +111,7 @@ async def test_cross_seat_deadlock(engine: AsyncEngine, seeded: Seeded) -> None:
     # 각 쌍에서 정확히 한쪽만 성공해야 한다.
     assert results["ok"] == pairs, f"쌍마다 1건씩 성공해야 함: {results}"
 
-    counts = await _status_counts(engine, seeded.schedule_id)
+    counts = await status_counts(engine, seeded.schedule_id)
     assert counts.get("HELD") == pairs * 2, counts
 
 
@@ -181,7 +139,7 @@ async def test_expired_hold_is_reclaimed_without_worker(
             conn, schedule_id=seeded.schedule_id, user_id=seeded.user_ids[1], seat_ids=[seat]
         )
     assert hold.seats[0].seat_id == seat
-    assert (await _status_counts(engine, seeded.schedule_id)).get("HELD") == 1
+    assert (await status_counts(engine, seeded.schedule_id)).get("HELD") == 1
 
 
 async def test_sweeper_reclaims_expired_holds(engine: AsyncEngine, seeded: Seeded) -> None:
@@ -199,14 +157,14 @@ async def test_sweeper_reclaims_expired_holds(engine: AsyncEngine, seeded: Seede
                 seat_ids=[s],
                 hold_ttl_sec=1,
             )
-    assert (await _status_counts(engine, seeded.schedule_id)).get("HELD") == 3
+    assert (await status_counts(engine, seeded.schedule_id)).get("HELD") == 3
     await asyncio.sleep(1.2)
 
     async with tx(engine) as conn:
         reclaimed = await hold_service.sweep_expired(conn)
 
     assert sorted(seat for _, seat in reclaimed) == sorted(seats)
-    counts = await _status_counts(engine, seeded.schedule_id)
+    counts = await status_counts(engine, seeded.schedule_id)
     assert counts.get("AVAILABLE") == 1200, counts
     assert "HELD" not in counts, counts
 
@@ -224,7 +182,7 @@ async def test_quota_is_enforced_under_concurrency(
     results = Counter(
         await asyncio.gather(
             *(
-                _try_hold(
+                try_hold(
                     engine,
                     schedule_id=seeded.schedule_id,
                     user_id=user,
@@ -237,7 +195,7 @@ async def test_quota_is_enforced_under_concurrency(
 
     assert results["deadlock"] == 0, results
     assert results["ok"] == policy.MAX_SEATS_PER_ORDER, f"한도가 안 지켜졌다: {results}"
-    counts = await _status_counts(engine, seeded.schedule_id)
+    counts = await status_counts(engine, seeded.schedule_id)
     assert counts.get("HELD") == policy.MAX_SEATS_PER_ORDER, counts
 
 
@@ -250,7 +208,7 @@ async def test_seat_count_invariant(engine: AsyncEngine, seeded: Seeded) -> None
     # 재고를 한 번 흔들어 놓고 확인한다.
     await asyncio.gather(
         *(
-            _try_hold(
+            try_hold(
                 engine,
                 schedule_id=seeded.schedule_id,
                 user_id=seeded.user_ids[i],
@@ -267,7 +225,7 @@ async def test_seat_count_invariant(engine: AsyncEngine, seeded: Seeded) -> None
     assert total == 1200 * len(seeded.schedule_ids)
 
     for sid in seeded.schedule_ids:
-        counts = await _status_counts(engine, sid)
+        counts = await status_counts(engine, sid)
         assert sum(counts.values()) == 1200, f"회차 {sid}: {counts}"
 
 
@@ -289,7 +247,7 @@ async def test_expand_schedule_seats_is_idempotent(
             layout=seeded.layout,
         )
     assert again == 0, f"두 번째 전개가 {again}행을 만들었다"
-    counts = await _status_counts(engine, seeded.schedule_id)
+    counts = await status_counts(engine, seeded.schedule_id)
     assert sum(counts.values()) == 1200, counts
 
 

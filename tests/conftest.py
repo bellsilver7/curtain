@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -61,6 +62,65 @@ async def engine() -> AsyncIterator[AsyncEngine]:
         yield eng
     finally:
         await eng.dispose()
+
+
+#: SQL 주석(`--` 부터 줄 끝까지)을 걷어낸다.
+#: 이 프로젝트의 쿼리는 주석이 두껍고, 그 주석 안에 `FOR UPDATE` 같은 문구가
+#: 설명으로 등장한다. 주석을 남겨두면 스파이가 SQL 이 아니라 산문을 센다.
+_SQL_COMMENT = re.compile(r"--[^\n]*")
+
+
+@dataclass(slots=True)
+class SqlSpy:
+    """실행된 SQL 문장을 기록한다. 게이트가 DB 부하를 실제로 덜어내는지 재는 도구.
+
+    "게이트를 붙였다"는 주석은 근거가 아니다. 패자 199건이 DB 에 도달하지
+    않는다는 것을 숫자로 보여야 한다.
+
+    문자열 리터럴 안의 `--` 는 구분하지 않는다. 지금 쿼리에는 그런 리터럴이
+    없고, 생기면 이 스파이부터 고쳐야 한다.
+    """
+
+    statements: list[str]
+
+    def reset(self) -> None:
+        self.statements.clear()
+
+    def record(self, statement: str) -> None:
+        self.statements.append(_SQL_COMMENT.sub("", statement))
+
+    def count(self, needle: str) -> int:
+        """`needle` 을 포함한 문장 수. 주석은 이미 제거된 상태로 비교한다."""
+        return sum(1 for s in self.statements if needle in s)
+
+    def touching(self, table: str) -> int:
+        return self.count(table)
+
+    def dump(self, limit: int = 200) -> str:
+        """실패 메시지에 붙일 요약. 무엇이 DB 로 갔는지 눈으로 보게 한다."""
+        return "\n".join(
+            f"  {' '.join(s.split())[:limit]}" for s in self.statements[:12]
+        )
+
+
+@pytest_asyncio.fixture
+async def sql_spy(engine: AsyncEngine) -> AsyncIterator[SqlSpy]:
+    """DB 왕복을 세는 스파이.
+
+    시드 단계의 문장까지 세지 않으려면 측정 직전에 `spy.reset()` 을 호출한다.
+    명시적으로 리셋하게 둔 것은, 무엇을 세는 구간인지 테스트를 읽는 사람이
+    바로 알 수 있게 하려는 것이다.
+    """
+    spy = SqlSpy([])
+
+    def _record(conn, cursor, statement, parameters, context, executemany):  # type: ignore[no-untyped-def]
+        spy.record(statement)
+
+    sa.event.listen(engine.sync_engine, "before_cursor_execute", _record)
+    try:
+        yield spy
+    finally:
+        sa.event.remove(engine.sync_engine, "before_cursor_execute", _record)
 
 
 @pytest_asyncio.fixture
@@ -172,6 +232,61 @@ async def seeded(engine: AsyncEngine, clean_db: None) -> Seeded:
         user_ids=tuple(user_ids),
         seat_ids=tuple(seat_ids),
     )
+
+
+# ─────────────────────────────────────────────────────── 공용 헬퍼
+
+
+async def try_hold(
+    engine: AsyncEngine,
+    *,
+    schedule_id: int,
+    user_id: int,
+    seat_ids: list[int],
+    **kw: object,
+) -> str:
+    """선점을 한 번 시도하고 결과를 문자열로 분류한다.
+
+    예외를 삼키지 않고 분류만 하는 이유: 200개 요청 중 몇 개가 어떤 이유로
+    실패했는지가 동시성 테스트의 측정 대상이기 때문이다. 데드락은 반드시
+    별도 분류로 남긴다 — 그냥 실패로 묶으면 잠금 순서가 깨진 것을 놓친다.
+    """
+    from asyncpg.exceptions import DeadlockDetectedError
+    from sqlalchemy.exc import DBAPIError
+
+    from app.infra.db.engine import tx
+    from app.service import hold_service
+    from app.service.hold_service import HoldRejected, QuotaExceeded
+
+    try:
+        async with tx(engine) as conn:
+            await hold_service.acquire(
+                conn,
+                schedule_id=schedule_id,
+                user_id=user_id,
+                seat_ids=seat_ids,
+                **kw,  # type: ignore[arg-type]
+            )
+        return "ok"
+    except QuotaExceeded:
+        return "quota"
+    except HoldRejected:
+        return "taken"
+    except DBAPIError as exc:
+        if isinstance(exc.orig, DeadlockDetectedError):
+            return "deadlock"
+        raise
+
+
+async def status_counts(engine: AsyncEngine, schedule_id: int) -> dict[str, int]:
+    """회차의 좌석 상태별 개수. 총량 보존 불변식의 재료."""
+    from app.infra.db import queries
+
+    async with engine.connect() as conn:
+        rows = (
+            await conn.execute(queries.SEAT_STATUS_COUNTS, {"schedule_id": schedule_id})
+        ).mappings()
+        return {r["status"]: r["n"] for r in rows}
 
 
 @pytest.fixture
