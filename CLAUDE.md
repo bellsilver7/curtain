@@ -41,6 +41,12 @@
 
 트랜잭션 경계는 `app/service/` 에 있다. 쿼리는 트랜잭션을 열지 않는다.
 
+Redis 왕복과 **실패 처리는 `app/infra/redis/client.py` 만 갖는다.** 서비스 계층에
+`except RedisError` 를 쓰지 않는다 — fail-open 을 호출부마다 적으면 하나만
+빠뜨렸을 때 Redis 장애가 판매 중단이 된다. 캐시가 필요하면 `cache_get_json` /
+`cache_set_json` 을 쓰고, 키 이름과 페이로드 모양만 서비스가 정한다.
+실패는 조용히 삼키지 않고 `degrade_reasons` 에 이유별로 센다.
+
 ## 쿼리는 Core 표현식, 세션은 쓰지 않는다
 
 쿼리는 `app/infra/db/queries.py` 의 SQLAlchemy Core 표현식이고, 상수가 아니라

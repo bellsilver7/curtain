@@ -89,7 +89,7 @@ app/
 
 ### 지금 통과하는 것
 
-`make test` → 37건. Postgres 16 에 실제 동시 요청을 던져 확인했다.
+`make test` → 40건. Postgres 16 에 실제 동시 요청을 던져 확인했다.
 
 | 시나리오 | 결과 |
 |---|---|
@@ -108,6 +108,8 @@ app/
 | 좌석맵: Redis 없음 | 매번 DB 로 가지만 내용은 정확 |
 | 잠금 절 | 선점 `ORDER BY … FOR UPDATE`, 스윕 `SKIP LOCKED`, `guard` 절이 사라지면 빨개진다 |
 | 만료 스윕 실행 계획 | `ix_hold_expiry` 부분 인덱스 사용 — [ADR 0004](docs/adr/0004-query-style.md) |
+| Redis: 좌석맵 조회 200회 | 접속 1번 — 풀 하나를 게이트와 캐시가 공유 |
+| Redis 장애·깨진 캐시 값 | 조회는 정확하고, 이유가 `degrade_reasons` 에 남는다 |
 
 ## 다음 한 걸음
 
@@ -118,7 +120,9 @@ app/
    tests/test_saga.py 6건이 skip 상태로 기다린다
 2. 대기열 — ZSET 큐와 입장 허용기. 유량 밸브 값을 부하 테스트로 확정한다
 3. HTTP 계층 — 좌석맵의 etag 는 아직 서비스 반환값일 뿐이다. 304 응답으로
-   쓰려면 라우터가 필요하다
+   쓰려면 라우터가 필요하다. 캐시 적중 한 건을 재보니 Redis GET 0.30ms 에
+   `json.loads` 0.68ms + `SeatView` 1,200개 조립 1.53ms 였다 — 적중 경로의
+   88% 가 역직렬화다. 304 는 그 전부를 건너뛴다
 4. CI — make drift 와 make test 를 걸어둔다
 
 ### 테스트를 의심하는 방법

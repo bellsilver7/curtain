@@ -14,7 +14,8 @@
 무효화 로직이 없으면 무효화 버그도 없다.
 
 캐시는 최적화이지 정합성이 아니다. Redis 가 죽으면 매 요청이 DB 로 가서
-느려질 뿐, 좌석맵 내용은 정확하다 (fail-open).
+느려질 뿐, 좌석맵 내용은 정확하다 (fail-open). 그 fail-open 은 이 모듈이 아니라
+app/infra/redis/client.py 가 갖는다 — 여기서는 키 이름과 페이로드 모양만 정한다.
 """
 
 from __future__ import annotations
@@ -26,7 +27,6 @@ from dataclasses import dataclass
 from hashlib import blake2b
 from typing import Any
 
-from redis.exceptions import RedisError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from app.domain import policy
@@ -123,53 +123,34 @@ def _lock_for(schedule_id: int) -> asyncio.Lock:
 async def _cache_read(schedule_id: int) -> Seatmap | None:
     """캐시 적중이면 Seatmap, 아니면 None.
 
-    Redis 장애도 None 이다 — 호출자는 "캐시에 없다"와 "Redis 가 없다"를
-    구분할 필요가 없고, 구분하게 만들면 장애 처리를 빠뜨리기 쉽다.
+    왕복과 실패 처리는 redis 클라이언트가 갖는다. 여기 남은 일은 페이로드를
+    Seatmap 으로 되돌리는 것뿐이다 — 어떤 계층이 Redis 를 쓰든 장애 처리가
+    한 곳에만 있어야, 캐시를 쓰는 곳이 늘어날 때 fail-open 을 빠뜨리지 않는다.
 
-    fail-open 을 실제로 담당하는 것은 아래 except 절이다. connection() 은
-    Redis 가 죽어 있어도 None 을 주지 않는다 — redis-py 의 커넥션 생성은
-    lazy 라서 명령을 보낼 때 처음 터진다. client is None 검사는 잘못된 URL
-    같은 경우에만 걸린다. 이 구조를 오해해서 fail-open 을 없앤 줄 알고
-    사보타주했다가 테스트가 초록인 것을 보고 두 번 헷갈렸다.
+    형식이 예상과 다르면 없는 것으로 본다. 직렬화 형식을 바꿀 때는 캐시 키의
+    버전 태그를 올리는 것이 정공법이고, 이 분기는 그때 놓친 값에 대한 보험이다.
     """
-    client = await redis_client.connection()
-    if client is None:
+    payload = await redis_client.cache_get_json(_cache_key(schedule_id))
+    if not isinstance(payload, dict):
         return None
     try:
-        raw = await client.get(_cache_key(schedule_id))
-    except (RedisError, OSError):
-        return None
-    if not raw:
-        return None
-    try:
-        payload = json.loads(raw)
         return Seatmap(
             schedule_id=schedule_id,
             etag=payload["etag"],
             seats=_to_seats(payload["rows"]),
             from_cache=True,
         )
-    except (ValueError, KeyError, TypeError):
-        # 형식이 깨진 값은 없는 것으로 본다. 곧 TTL 로 사라진다.
+    except (KeyError, TypeError, ValueError):
         return None
 
 
 async def _cache_write(schedule_id: int, etag: str, rows: list[list[Any]]) -> None:
-    """best-effort. 실패해도 조회는 이미 성공했으므로 조용히 넘어간다."""
-    client = await redis_client.connection()
-    if client is None:
-        return
-    payload = json.dumps(
-        {"etag": etag, "rows": rows}, separators=(",", ":"), ensure_ascii=False
+    """best-effort. 실패해도 조회는 이미 성공했으므로 그냥 넘어간다."""
+    await redis_client.cache_set_json(
+        _cache_key(schedule_id),
+        {"etag": etag, "rows": rows},
+        ttl_sec=policy.SEATMAP_CACHE_TTL.total_seconds(),
     )
-    try:
-        await client.set(
-            _cache_key(schedule_id),
-            payload,
-            px=int(policy.SEATMAP_CACHE_TTL.total_seconds() * 1000),
-        )
-    except (RedisError, OSError):
-        return
 
 
 async def _read_db(engine: AsyncEngine, schedule_id: int) -> list[list[Any]]:

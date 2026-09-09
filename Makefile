@@ -79,8 +79,8 @@ test: check-deps up       ## 전체. docs/design.md 검증 시나리오 표를 �
 test-concurrency: check-deps up  ## 좌석 경합·데드락·총량 보존
 	$(PYTEST) tests/test_concurrency.py -q
 
-test-gate: check-deps up  ## 게이트 명세 5건
-	$(PYTEST) tests/test_seat_gate.py -q
+test-gate: check-deps up  ## 게이트 명세와 Redis 클라이언트
+	$(PYTEST) tests/test_seat_gate.py tests/test_redis_client.py -q
 
 test-seatmap: check-deps up  ## 좌석맵 조회와 캐시 7건
 	$(PYTEST) tests/test_seatmap.py -q

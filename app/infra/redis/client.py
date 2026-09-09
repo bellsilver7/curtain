@@ -1,13 +1,19 @@
-"""Redis 좌석 게이트 클라이언트 (설계 문서: Redis 좌석 게이트)
+"""Redis 클라이언트 — 좌석 게이트와 캐시 (설계 문서: Redis 좌석 게이트)
 
-게이트는 정합성이 아니라 부하를 위한 것이다. 같은 좌석에 몰린 수백 요청을
-DB 행 잠금까지 내려보내지 않고 여기서 걸러낸다. Redis 를 통째로 날려도
-오버부킹은 발생하지 않아야 하고, 그래서 이 모듈의 모든 실패는 fail-open 이다.
+이 모듈이 Redis 에 대한 유일한 창구다. 커넥션 풀, 스크립트 등록, 그리고 무엇보다
+**모든 실패 처리**가 여기 모여 있다. 게이트는 정합성이 아니라 부하를 위한 것이고
+(같은 좌석에 몰린 수백 요청을 DB 행 잠금까지 내려보내지 않고 걸러낸다), Redis 를
+통째로 날려도 오버부킹은 발생하지 않아야 하므로 이 모듈의 모든 실패는 fail-open 이다.
+
+fail-open 을 여기 모아두는 이유는 하나다. 호출부에 흩어 놓으면 하나만 빠뜨려도
+Redis 장애가 판매 중단이 된다. 대신 조용히 삼키지 않고 degrade_reasons 에 이유별로
+센다 — "Redis 가 죽은 채로 전 요청이 DB 로 가는" 상황이 아무 신호 없이 지나가면
+그게 더 나쁘다.
 
 대기열은 반대로 fail-closed 다. 같은 Redis 장애에 대응이 반대인 이유는 하나가
 정합성 밖에 있고 하나가 부하 방벽이기 때문이다.
 
-API 는 컨텍스트 매니저 하나다.
+게이트 API 는 컨텍스트 매니저 하나다.
 
     async with hold_gate(schedule_id=.., user_id=.., seat_ids=[..],
                          hold_ttl_sec=420) as gate:
@@ -19,11 +25,19 @@ API 는 컨텍스트 매니저 하나다.
 keep() 을 부르지 않고 블록을 벗어나면 게이트는 자동으로 반납된다. 함수 세 개로
 쪼개 두면 "DB 가 거절했을 때 반납"을 잊기 쉽고, 잊으면 유령 매진이 된다 —
 잊을 수 없는 모양으로 만드는 것이 이 설계의 요점이다.
+
+캐시 API 는 두 개다.
+
+    payload = await cache_get_json(key)            # 없으면 None
+    await cache_set_json(key, payload, ttl_sec=3)  # 실패하면 False
+
+키 이름과 페이로드 모양은 캐시를 쓰는 계층이 정한다. 여기서는 왕복과 실패만 다룬다.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from collections import Counter
 from collections.abc import AsyncIterator, Sequence
@@ -70,6 +84,12 @@ _MAX_CONNECTIONS = int(os.getenv("REDIS_MAX_CONNECTIONS", "24"))
 #: 타임아웃은 "바쁘다"이고 "죽었다"가 아니다. 한 번은 다시 물어본다.
 #: seat_gate.lua 가 같은 토큰에 멱등하므로 재시도가 안전하다.
 _RETRIES = int(os.getenv("REDIS_GATE_RETRIES", "1"))
+
+
+# 예외 묶음. redis.exceptions.TimeoutError 는 RedisError 이고, 파이썬의
+# TimeoutError(= asyncio.TimeoutError, socket.timeout)는 OSError 다.
+# 둘이면 타임아웃까지 전부 덮인다.
+_UNREACHABLE = (RedisError, OSError)
 
 
 def redis_url() -> str:
@@ -195,15 +215,75 @@ async def _bundle() -> _Bundle | None:
     return bundle
 
 
-async def connection() -> Redis | None:
-    """게이트와 같은 커넥션 풀을 공유하는 클라이언트, 또는 닿지 못하면 None.
+async def _client() -> Redis | None:
+    """게이트와 캐시가 공유하는 클라이언트, 또는 닿지 못하면 None.
 
-    좌석맵 캐시처럼 Redis 를 쓰는 다른 계층이 자기 풀을 따로 만들면, 커넥션
-    수가 두 배가 되고 close_all() 로 정리되지 않아 테스트가 죽은 이벤트 루프에
-    묶인 커넥션을 물려받는다. 하나만 두고 나눠 쓴다.
+    풀은 (URL, 루프) 당 하나다. 계층마다 자기 풀을 만들면 커넥션 수가 배로 늘고
+    close_all() 로 정리되지 않아 테스트가 죽은 이벤트 루프에 묶인 커넥션을
+    물려받는다.
+
+    주의: Redis 가 죽어 있어도 이 함수는 None 을 주지 않는다. redis-py 의 커넥션
+    생성은 lazy 라서 명령을 보낼 때 처음 터진다. None 은 URL 자체가 잘못된 경우에만
+    나온다 — 즉 fail-open 을 실제로 담당하는 것은 명령을 감싼 except 절이다.
+    이 구조를 오해해서 "fail-open 을 없앴는데 테스트가 초록"인 것을 보고 두 번
+    헷갈렸으므로 여기 적어 둔다.
     """
     bundle = await _bundle()
     return bundle.client if bundle is not None else None
+
+
+# ─────────────────────────────────────────────────────────────── 캐시
+
+async def cache_get_json(key: str) -> object | None:
+    """캐시에서 JSON 문서를 읽는다. 없으면 None.
+
+    "캐시에 없다", "Redis 가 죽었다", "값이 깨졌다"를 호출자가 구분하지 않게 만든
+    것이 의도다. 구분하게 만들면 호출자마다 장애 분기를 붙여야 하고, 캐시를 쓰는
+    계층이 늘어날 때마다 하나씩 빠뜨린다.
+
+    구분은 호출자 대신 degrade_reasons 가 한다. 정상적인 miss 는 세지 않는다 —
+    그것은 장애가 아니라 캐시의 일상이다.
+    """
+    client = await _client()
+    if client is None:
+        degrade_reasons["cache_get:unreachable"] += 1
+        return None
+    try:
+        raw = await client.get(key)
+    except _UNREACHABLE as exc:
+        degrade_reasons[f"cache_get:{type(exc).__name__}"] += 1
+        return None
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except ValueError:
+        # 깨진 값은 없는 것으로 본다. 곧 TTL 로 사라진다. 다만 조용히 넘기지는
+        # 않는다 — 이게 늘어나면 직렬화 형식이 배포 중에 엇갈렸다는 신호다.
+        degrade_reasons["cache_get:corrupt"] += 1
+        return None
+
+
+async def cache_set_json(key: str, value: object, *, ttl_sec: float) -> bool:
+    """캐시에 JSON 문서를 쓴다. 성공 여부만 돌려준다.
+
+    best-effort 다. 여기서 예외가 올라가면 이미 성공한 조회가 실패 응답으로
+    바뀐다 — 캐시를 못 채운 대가는 다음 요청이 원본을 한 번 더 읽는 것뿐이다.
+
+    직렬화 실패는 삼키지 않는다. 그건 Redis 장애가 아니라 넘긴 값이 잘못된
+    것이고, 조용히 넘기면 캐시가 영원히 비어 있는 채로 아무도 모른다.
+    """
+    payload = json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+    client = await _client()
+    if client is None:
+        degrade_reasons["cache_set:unreachable"] += 1
+        return False
+    try:
+        await client.set(key, payload, px=max(1, int(ttl_sec * 1000)))
+    except _UNREACHABLE as exc:
+        degrade_reasons[f"cache_set:{type(exc).__name__}"] += 1
+        return False
+    return True
 
 
 def _keys(schedule_id: int, seat_ids: Sequence[int]) -> list[str]:
@@ -257,7 +337,7 @@ async def hold_gate(
                 await bundle.acquire(keys=keys, args=[token, ttl_ms])  # type: ignore[operator]
             )
             break
-        except (RedisError, OSError, asyncio.TimeoutError) as exc:
+        except _UNREACHABLE as exc:
             last = exc
 
     if blocked_index is None:
@@ -306,7 +386,7 @@ async def _release(bundle: _Bundle, keys: list[str], token: str) -> int:
         return 0
     try:
         return int(await bundle.release(keys=keys, args=[token]))  # type: ignore[operator]
-    except (RedisError, OSError):
+    except _UNREACHABLE:
         return 0
 
 
@@ -315,6 +395,6 @@ async def close_all() -> None:
     for bundle in list(_bundles.values()):
         try:
             await bundle.client.aclose()
-        except (RedisError, OSError):
+        except _UNREACHABLE:
             pass
     _bundles.clear()
