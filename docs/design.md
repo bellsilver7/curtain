@@ -188,9 +188,14 @@ stateDiagram-v2
     AVAILABLE --> HELD : 선점 (TTL 420s)
     HELD --> BOOKED : 결제 승인 (한 트랜잭션)
     HELD --> AVAILABLE : TTL 만료 · 결제 실패 · 이탈<br/>(워커가 1s마다 회수)
-    BOOKED --> CANCELLED : 취소 요청
-    CANCELLED --> AVAILABLE : 환불 완료 후 재고 복원
+    BOOKED --> AVAILABLE : 취소 + 환불 완료 후 재고 복원
 ```
+
+> **초안에서 바뀐 점.** 처음에는 `CANCELLED` 를 좌석 상태로 뒀지만, 좌석 상태는
+> "지금 팔 수 있는가"만 답하면 된다. 환불 대기 중인 좌석은 팔 수 없으므로
+> (§7.3: 좌석 복원은 환불 성공 확인 후) `BOOKED` 와 구분할 실익이 없다.
+> 취소는 주문 상태(`orders.status = 'CANCELED'`)로 표현하고, 좌석은 환불이 확인된
+> 뒤 한 번에 `AVAILABLE` 로 돌아온다. 그래서 `seat_status` ENUM 은 세 값뿐이다.
 
 `HELD`는 유일하게 시간이 지나면 *스스로 무너지는* 상태다. 그래서 정상 경로(결제 승인)와
 비정상 경로(만료·이탈)가 같은 목적지로 수렴하고, 어떤 클라이언트 사고도 좌석을 영구히
@@ -201,8 +206,8 @@ stateDiagram-v2
 | `AVAILABLE` → `HELD` | `POST /holds` | 요청 좌석 **전량**이 가용 · 회차당 보유 ≤ 4매 | `409 SEAT_TAKEN` |
 | `HELD` → `BOOKED` | PG 승인 성공 | `held_by` 일치 · `hold_expires_at > now()` | `409 HOLD_EXPIRED` + 자동 환불 |
 | `HELD` → `AVAILABLE` | 워커 / `DELETE /holds` | 만료됨, 또는 본인 해제 | — |
-| `BOOKED` → `CANCELLED` | `POST /orders/{id}/cancel` | 관람일 D-1 이전 | `422 CANCEL_CLOSED` |
-| `CANCELLED` → `AVAILABLE` | 환불 확인 워커 | PG 환불 완료 응답 | 재시도 (재고 복원 지연 허용) |
+| 주문 → `CANCELED` | `POST /orders/{id}/cancel` | 관람일 D-1 이전 | `422 CANCEL_CLOSED` |
+| `BOOKED` → `AVAILABLE` | 환불 확인 워커 | PG 환불 완료 응답 | 재시도 (재고 복원 지연 허용) |
 
 > **왜 `HELD` → `BOOKED` 실패에 환불이 붙나**
 > 결제는 승인됐는데 그 순간 hold가 만료돼 있는 창(window)이 실존한다. PG 승인 왕복이 hold
@@ -271,6 +276,16 @@ RETURNING s.seat_id, s.price, s.hold_expires_at;
 
 반환 행 수가 0이면 그대로 `409`다. 애플리케이션에는 분기가 없고, 부분 성공이 발생할 수 있는
 코드 경로 자체가 존재하지 않는다.
+
+> **검증 결과 (2026-09-09)**
+> 실제 Postgres 16 에 동시 200요청을 던져 확인했다. **좌석 판정은 설계대로 동작한다** —
+> 같은 좌석 200요청 중 성공 1건, `[A,B]`/`[B,A]` 교차 요청 240건에서 데드락 0건.
+> `ORDER BY seat_id FOR UPDATE` 잠금 순서 가정은 유효했다.
+>
+> 다만 **같은 CTE 안의 구매 한도 판정은 샜다.** 한 유저의 12개 동시 요청 중 7건이
+> 성공했다(한도 4매). 좌석은 행 잠금이 직렬화하지만, 한도는 "몇 석 갖고 있나"라는
+> 술어라서 잠글 행이 없다(phantom → write skew). (회차, 사용자) 어드바이저리 락을
+> `HOLD_SEATS` 직전에 잡아 해결했다 — 근거와 대안 비교는 [ADR 0003](adr/0003-quota-advisory-lock.md).
 
 > **검증할 것**
 > CTE 안의 `ORDER BY … FOR UPDATE`가 실제로 그 순서대로 잠근다는 보장은 실행 계획에 달려

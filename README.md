@@ -72,22 +72,42 @@ app/
 
 초기 커밋 시점의 스캐폴드다. 실제로 동작하는 것은 아래뿐이다.
 
-- [x] 설계 문서 (`docs/design.md`) · 결정 기록 (`docs/adr/`)
+- [x] 설계 문서 (`docs/design.md`) · 결정 기록 (`docs/adr/` 3건)
 - [x] 스키마 — 모델(`app/infra/db/models.py`) + Alembic 리비전 `0001`
-      (upgrade → `alembic check` 드리프트 없음 → downgrade 왕복까지 검증 완료)
-- [x] 정책 상수와 취소 수수료 계산 (`app/domain/policy.py`) — `make test-unit` 통과
-- [x] Redis 좌석 게이트 Lua (`app/infra/redis/lua/seat_gate.lua`)
-- [ ] 1주차 — 재고 골격: 좌석 전개 · 좌석맵 조회 + ETag 캐시
-- [ ] 2주차 — 선점과 회수: 조건부 UPDATE · 게이트 연결 · `hold_sweeper`
-- [ ] 3주차 — 결제 사가: FakePG · 확정 트랜잭션 · 리컨실러 · 멱등 3겹
-- [ ] 4주차 — 대기열과 부하: ZSET 큐 · 입장 허용기 · locust
+- [x] 정책 상수와 취소 수수료 (`app/domain/policy.py`), 상태 전이 규칙 (`app/domain/seat.py`)
+- [x] 좌석 전개 (`app/service/schedule_service.py`) — 1,200석 × 3회차, 멱등
+- [x] **좌석 선점** (`app/service/hold_service.py` + `app/infra/db/queries.py`)
+      — 전량 아니면 0석, 만료 hold 즉시 회수, 구매 한도
+- [x] `hold_sweeper` 회수 로직 (워커 루프는 아직 스텁)
+- [x] **동시성 테스트 통과** — 아래 참고
+- [ ] Redis 좌석 게이트 연결 (`seat_gate.lua` 는 작성됨, 아직 안 붙임)
+- [ ] 좌석맵 조회 + ETag · 3초 캐시
+- [ ] 결제 사가: FakePG · 확정 트랜잭션 · 리컨실러 · 멱등 3겹
+- [ ] 대기열: ZSET 큐 · 입장 허용기 · locust
+
+### 지금 통과하는 것
+
+`make test` → 16건. Postgres 16 에 실제 동시 요청을 던져 확인했다.
+
+| 시나리오 | 결과 |
+|---|---|
+| 같은 좌석 1석에 동시 200 요청 | 성공 1건, 나머지 409, `HELD` 행 1개 |
+| `[A,B]` / `[B,A]` 교차 요청 240건 | 데드락 0건 — §5.2 잠금 순서 가정 유효 |
+| 4석 중 1석 선점된 상태에서 4석 요청 | 전체 실패, 쓰레기 hold 0건 |
+| 한 유저 12개 동시 요청 | 성공 4건 (한도 준수) — [ADR 0003](docs/adr/0003-quota-advisory-lock.md) |
+| 만료 hold | 선점 쿼리가 즉시 회수 / `hold_sweeper` 도 회수 |
+| 총량 보존 | `AVAILABLE + HELD + BOOKED = 1200 × 3` |
 
 ## 다음 한 걸음
 
-`tests/test_concurrency.py`부터 채우는 것을 권한다. 테스트가 먼저 있으면 §5.2의 SQL이
-맞는지 하루 안에 판정 나고, 틀렸을 때 무엇을 바꿔야 하는지도 명확해진다. 반대로 API부터
-만들면 "일단 동작하는데 진짜 맞는지 모르는" 코드가 4주 내내 남는다.
+§5 의 정합성 부분은 증명됐다. 남은 것은 그 위에 붙는 것들이다.
 
-특히 §5.2의 CTE 안 `ORDER BY seat_id FOR UPDATE`가 실제로 그 순서대로 잠근다는 보장은
-실행 계획에 달려 있다. 문서를 믿지 말고 교차 좌석 조합(`[A,B]`와 `[B,A]` 동시)으로
-데드락 발생 여부를 직접 확인할 것.
+1. **Redis 좌석 게이트 연결** — `seat_gate.lua` 를 `hold_service` 앞에 붙이고,
+   `redis-cli FLUSHALL` 을 던져도 오버부킹이 0건임을 확인한다. 원칙 01 의 유일한 증명이고,
+   이걸 통과하면 게이트가 정합성이 아니라 부하를 위한 것임이 증명된다.
+2. **좌석맵 조회 + 3초 캐시** — 요청 수가 압도적으로 많은 경로다. 캐시 없이 부하를 주면
+   선점 트랜잭션이 쓸 커넥션이 남지 않는다 (§5.5).
+3. **결제 사가** — FakePG 에 타임아웃을 주입해 리컨실러가 실제로 뒤를 받치는지 본다 (§7).
+
+CI 에 `make drift` 와 `make test` 를 걸어두는 것도 지금이 적기다. 동시성 테스트는
+로컬에서만 도는 순간 아무도 안 돌리게 된다.

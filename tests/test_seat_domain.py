@@ -9,13 +9,44 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.domain import policy
+from app.domain import policy, seat
 
 
 def test_policy_doctests() -> None:
     """§1.1 정책 상수와 §7.3 수수료 계산의 예시가 실제로 맞는지."""
     result = doctest.testmod(policy, verbose=False)
     assert result.failed == 0, f"{result.failed} doctest(s) failed"
+
+
+def test_seat_doctests() -> None:
+    """§4 상태 전이 규칙의 예시가 실제로 맞는지."""
+    result = doctest.testmod(seat, verbose=False)
+    assert result.failed == 0, f"{result.failed} doctest(s) failed"
+
+
+def test_transition_table_matches_design() -> None:
+    """§4 전이 표 전체를 코드로 고정한다.
+
+    허용 목록을 넓히는 변경은 이 테스트를 반드시 깨야 한다 — 좌석 상태가
+    한 칸 늘어나는 것은 설계 변경이고, 조용히 통과해서는 안 된다.
+    """
+    S = seat.SeatStatus
+    allowed = {(src, dst) for src, dsts in seat.ALLOWED.items() for dst in dsts}
+    assert allowed == {
+        (S.AVAILABLE, S.HELD),  # 선점
+        (S.HELD, S.BOOKED),  # 결제 승인
+        (S.HELD, S.AVAILABLE),  # TTL 만료 · 결제 실패 · 이탈
+        (S.BOOKED, S.AVAILABLE),  # 취소 + 환불 완료 후 재고 복원
+    }
+
+
+def test_booked_seat_never_becomes_claimable() -> None:
+    """팔린 좌석은 어떤 경우에도 선점 대상이 아니다.
+
+    hold 메타데이터가 남아 있는 이상한 행이 생겨도 재판매되면 안 된다.
+    """
+    for expired in (True, False):
+        assert not seat.is_claimable(seat.SeatStatus.BOOKED, hold_expired=expired)
 
 
 def test_seat_gate_ttl_is_shorter_than_hold_ttl() -> None:
