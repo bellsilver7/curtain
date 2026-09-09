@@ -21,16 +21,21 @@ FastAPI · PostgreSQL 16 · Redis 7
 
 ## 시작하기
 
+Python 3.11 이상이 필요하다. macOS 기본 `python3` 은 아직 3.9 인 경우가 많으니
+버전을 먼저 확인할 것.
+
 ```bash
 cp .env.example .env
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-
-make up          # postgres + redis 기동
-make migrate     # 스키마 적용
+make install     # .venv 생성 + 의존성 설치. python3 이 3.11 미만이면
+                 #   make install PY_BOOTSTRAP=python3.12
+make migrate     # postgres/redis 기동 후 스키마 적용
 make api         # http://localhost:8000/docs
 make worker      # 배치 워커 4종 (별도 터미널)
 ```
+
+`make` 는 `.venv/bin/` 을 자동으로 찾으므로 activate 하지 않아도 된다.
+직접 `pytest` 나 `alembic` 을 칠 때만 `source .venv/bin/activate` 가 필요하다.
+`make help` 로 전체 타깃을 볼 수 있다.
 
 ## 자주 쓰는 명령
 
