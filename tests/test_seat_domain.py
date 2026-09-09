@@ -70,5 +70,17 @@ def test_cancel_closed_on_show_day() -> None:
         policy.cancel_fee(100_000, now, now + timedelta(hours=9))
 
 
-# TODO(1주차): app/domain/seat.py 의 can_transition() 을 좌석 상태 전이 전이 표 전체로 검증
 # TODO(3주차): app/domain/order.py 의 사가 전이 가드 검증
+#              (전이 표 검증은 test_transition_table_matches_design 에서 이미 한다)
+
+
+def test_seatmap_cache_ttl_is_short_enough() -> None:
+    """좌석맵 캐시 TTL 은 hold TTL 보다 훨씬 짧아야 한다.
+
+    좌석맵이 hold 보다 오래 낡아 있으면 사용자가 이미 팔린 좌석을 계속
+    고르게 되고, 선점 API 가 매번 409 를 내는 상황이 된다.
+
+    인프라가 필요 없는 정책 검사라 여기 둔다 — make test-unit 에서도 돈다.
+    """
+    assert policy.SEATMAP_CACHE_TTL.total_seconds() > 0
+    assert policy.SEATMAP_CACHE_TTL < policy.HOLD_TTL

@@ -13,7 +13,7 @@ PYTHON  := $(if $(wildcard $(VENV)/bin/python),$(VENV)/bin/python,python3)
 PY_BOOTSTRAP ?= python3
 
 .PHONY: help install check-deps up down migrate revision migrate-down migrate-sql drift \
-        api worker test test-unit test-concurrency test-gate load lint fmt
+        api worker test test-unit test-concurrency test-gate test-seatmap load lint fmt
 
 help:          ## 사용 가능한 타깃
 	@awk 'match($$0, /^[a-zA-Z_-]+:.*## /) { \
@@ -78,8 +78,11 @@ test: check-deps up       ## 전체. docs/design.md 검증 시나리오 표를 �
 test-concurrency: check-deps up  ## 좌석 경합·데드락·총량 보존
 	$(PYTEST) tests/test_concurrency.py -q
 
-test-gate: check-deps up  ## 지금 작업 중인 것. 게이트 명세 5건
+test-gate: check-deps up  ## 게이트 명세 5건
 	$(PYTEST) tests/test_seat_gate.py -q
+
+test-seatmap: check-deps up  ## 지금 작업 중인 것. 좌석맵 명세 7건
+	$(PYTEST) tests/test_seatmap.py -q
 
 load: check-deps up       ## 오픈런 부하 (검증 시나리오 마지막 두 줄)
 	$(LOCUST) -f load/locustfile.py --host http://localhost:8000

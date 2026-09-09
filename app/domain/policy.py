@@ -30,6 +30,14 @@ ADMIT_PER_SECOND = 200
 #: 입장 토큰 유효 시간.
 ENTRY_TOKEN_TTL = timedelta(minutes=10)
 
+#: 좌석맵 캐시 TTL. 조회는 선점보다 요청이 수십 배 많으므로 매번 DB 를 때리면
+#: 선점 트랜잭션이 쓸 커넥션이 남지 않는다.
+#:
+#: 이 시간만큼의 stale 은 의도적으로 수용한다. 좌석맵은 힌트이고 진짜 판정은
+#: 선점 API 가 하므로, 개별 좌석 변경마다 정교하게 무효화하지 않는다 —
+#: 무효화 로직이 없으면 무효화 버그도 없다.
+SEATMAP_CACHE_TTL = timedelta(seconds=3)
+
 #: 클라이언트 순번 폴링 간격. 이보다 잦은 요청은 레이트리밋 대상.
 QUEUE_POLL_INTERVAL = timedelta(seconds=2)
 
