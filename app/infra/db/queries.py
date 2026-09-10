@@ -35,7 +35,16 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import aliased
 
-from app.infra.db.models import Order, OrderItem, ScheduleSeat, Seat, Venue
+from app.infra.db.models import (
+    Order,
+    OrderItem,
+    Outbox,
+    Payment,
+    Schedule,
+    ScheduleSeat,
+    Seat,
+    Venue,
+)
 
 # ══════════════════════════════════════════════════════════════ 리터럴 · 헬퍼
 
@@ -403,4 +412,360 @@ def seat_status_counts(*, schedule_id: int) -> sa.Select[Any]:
         )
         .where(ScheduleSeat.schedule_id == schedule_id)
         .group_by(ScheduleSeat.status)
+    )
+
+
+# ══════════════════════════════════════════════════════════════ 결제 사가
+
+# 주문 상태 리터럴. 좌석 상태와 같은 이유로 리터럴이다 (위 _HELD 주석 참고).
+_PENDING = sa.literal_column("'PENDING'")
+_CANCELED = sa.literal_column("'CANCELED'")
+
+# 결제 시도 상태.
+_REQUESTED = sa.literal_column("'REQUESTED'")
+_APPROVED = sa.literal_column("'APPROVED'")
+_REFUNDED = sa.literal_column("'REFUNDED'")
+_PAID_LITERAL = _PAID
+_FAILED = sa.literal_column("'FAILED'")
+
+
+def held_seats_for_order(
+    *, schedule_id: int, user_id: int, seat_ids: Sequence[int]
+) -> sa.Select[Any]:
+    """hold 현황. **실패를 설명하기 위한 조회다.**
+
+    판정은 open_order() 한 문장이 한다. 이 조회는 그것이 0행을 돌려줬을 때
+    "몇 석이 유효했고 잔여가 얼마였는지"를 사용자에게 말해주기 위한 것이므로,
+    판정 근거로 쓰면 안 된다 — 읽는 시점과 쓰는 시점이 갈리는 순간 그 사이에
+    남이 끼어든다.
+    """
+    return (
+        sa.select(
+            ScheduleSeat.id,
+            ScheduleSeat.seat_id,
+            ScheduleSeat.grade,
+            ScheduleSeat.price,
+            ScheduleSeat.hold_expires_at,
+            # 잔여를 DB 가 계산해서 준다. 애플리케이션이 now() 를 찍어 빼면
+            # API·워커·DB 의 시계 차이가 그대로 판정에 섞인다.
+            (ScheduleSeat.hold_expires_at - _NOW).label("remaining"),
+        )
+        .where(
+            ScheduleSeat.schedule_id == schedule_id,
+            ScheduleSeat.seat_id == sa.any_(_bigint_array(seat_ids)),
+            ScheduleSeat.status == _HELD,
+            ScheduleSeat.held_by == user_id,
+            ScheduleSeat.hold_expires_at > _NOW,
+        )
+        .order_by(ScheduleSeat.seat_id)
+    )
+
+
+def open_order(
+    *,
+    schedule_id: int,
+    user_id: int,
+    seat_ids: Sequence[int],
+    idempotency_key: str,
+    min_hold_remaining_sec: int,
+) -> sa.Insert:
+    """PENDING 주문 생성. 사가의 유일한 진입 문장이다.
+
+    선행 조건 전부를 이 한 문장에 넣는다 — 유효한 내 hold 인지, 전량인지,
+    승인 왕복을 버틸 잔여가 있는지, 그리고 같은 멱등키가 없는지. 밖에서 확인하고
+    나중에 쓰면 그 사이에 남이 끼어든다 (원칙 "모든 상태 전이는 조건부 쓰기").
+
+    장치가 셋이다.
+
+      HAVING count(*) = cardinality(...)   전량 아니면 0행. 부분 주문은 만들어질
+                                           수 있는 코드 경로 자체가 없다
+      hold_expires_at > now() + 잔여       잔여 검사를 시각 비교로 바꾼다.
+                                           애플리케이션 시계가 끼어들지 않는다
+      ON CONFLICT DO NOTHING               멱등성 1겹. 같은 키의 동시 요청 중
+                                           한 건만 행을 만든다
+
+    **0행의 뜻이 두 가지**라는 것이 이 설계의 값이다. hold 가 없었거나, 같은 키가
+    이미 있었거나. 호출부는 그 둘을 멱등키 조회 하나로 가르므로 분기가 하나뿐이고,
+    그 하나는 두 경로 모두에서 실행된다 — 테스트가 닿지 않는 방어 코드가 남지 않는다.
+
+    금액도 DB 가 정한다. 클라이언트가 보낸 금액을 믿으면 결제 금액 조작이 된다.
+    """
+    wanted = _bigint_array(seat_ids)
+    source = (
+        sa.select(
+            sa.literal(schedule_id, sa.BigInteger),
+            sa.literal(user_id, sa.BigInteger),
+            wanted,
+            sa.func.sum(ScheduleSeat.price),
+            sa.literal(idempotency_key, sa.Text),
+        )
+        .where(
+            ScheduleSeat.schedule_id == schedule_id,
+            ScheduleSeat.seat_id == sa.any_(wanted),
+            ScheduleSeat.status == _HELD,
+            ScheduleSeat.held_by == user_id,
+            ScheduleSeat.hold_expires_at > _NOW + _seconds(min_hold_remaining_sec),
+        )
+        .having(sa.func.count() == sa.func.cardinality(wanted))
+    )
+    return (
+        pg_insert(Order)
+        .from_select(
+            ["schedule_id", "user_id", "seat_ids", "total_amount", "idempotency_key"],
+            source,
+        )
+        .on_conflict_do_nothing(constraint="uq_orders_idempotency_key")
+        .returning(Order.id, Order.total_amount)
+    )
+
+
+def order_by_idempotency_key(*, idempotency_key: str) -> sa.Select[Any]:
+    """중복 요청이 재생할 응답을 찾는다."""
+    return sa.select(
+        Order.id, sa.cast(Order.status, sa.Text).label("status"), Order.response_snapshot
+    ).where(Order.idempotency_key == idempotency_key)
+
+
+def order_for_saga(*, order_id: int) -> sa.Select[Any]:
+    """사가가 주문 하나를 다룰 때 필요한 전부.
+
+    schedules 를 조인하는 이유는 취소 수수료가 관람일시 기준이기 때문이다
+    (취소와 환불). 주문만 읽고 나중에 회차를 또 조회하면, 그 사이에 회차가
+    변경되는 경우를 생각해야 한다.
+    """
+    return (
+        sa.select(
+            Order.id,
+            Order.user_id,
+            Order.schedule_id,
+            sa.cast(Order.status, sa.Text).label("status"),
+            Order.seat_ids,
+            Order.total_amount,
+            Order.response_snapshot,
+            Schedule.starts_at,
+        )
+        .join_from(Order, Schedule, Schedule.id == Order.schedule_id)
+        .where(Order.id == order_id)
+    )
+
+
+def mark_order_paid(*, order_id: int) -> sa.Update:
+    """확정의 첫 문장. 멱등성 2겹 (멱등성 세 겹).
+
+    WHERE status = 'PENDING' 이 전부다. 두 번째 호출은 0행을 갱신하고 조용히
+    끝나므로, 웹훅 재전송과 리컨실러와 동기 응답이 서로를 모르면서도 안전하다.
+    0행은 에러가 아니라 "이미 다른 경로가 처리했다"는 정상 종료다.
+
+    응답 스냅샷은 set_order_snapshot() 이 같은 트랜잭션에서 쓴다. 확정할 좌석이
+    무엇인지는 이 문장 다음에 알게 되므로 한 문장으로는 묶을 수 없다.
+    """
+    return (
+        sa.update(Order)
+        .where(Order.id == order_id, Order.status == _PENDING)
+        .values(status=_PAID_LITERAL, paid_at=_NOW)
+        .returning(Order.id)
+    )
+
+
+#: order_status ENUM 의 값. literal_column 에 문자열을 끼워 넣으므로,
+#: 그 문자열이 이 집합 안에 있다는 것을 확인한 뒤에만 쓴다 — 상태값은 내부
+#: 어휘이고 사용자 입력이 아니지만, 그 전제가 깨지면 주입이 되므로 검사로 고정한다.
+_ORDER_STATUSES = frozenset({"PENDING", "PAID", "CANCELED", "FAILED"})
+_PAY_STATUSES = frozenset({"REQUESTED", "APPROVED", "FAILED", "REFUNDED"})
+
+
+def set_order_snapshot(*, order_id: int, snapshot: dict[str, Any]) -> sa.Update:
+    """응답 스냅샷을 쓴다. 확정 트랜잭션 안에서만 호출한다.
+
+    상태 조건이 없는 것은 의도다 — 이 문장은 같은 트랜잭션에서 방금
+    PENDING → PAID 를 성공시킨 뒤에만 실행되므로, 조건을 또 붙이면
+    (이미 PAID 이므로) 0행이 되어 스냅샷이 영원히 비어 있게 된다.
+    """
+    return (
+        sa.update(Order)
+        .where(Order.id == order_id)
+        .values(response_snapshot=snapshot)
+        .returning(Order.id)
+    )
+
+
+def mark_order(*, order_id: int, status: str, expect: str) -> sa.Update:
+    """조건부 상태 전이 하나. 전이 표는 app/domain/order.py 가 갖는다.
+
+    expect 를 인자로 받는 것이 요점이다. 기대 상태 없는 UPDATE 는 리뷰에서
+    거절한다 (원칙 "모든 상태 전이는 조건부 쓰기").
+    """
+    if status not in _ORDER_STATUSES or expect not in _ORDER_STATUSES:
+        raise ValueError(f"order_status 값이 아니다: {status!r} / {expect!r}")
+    values: dict[str, Any] = {"status": sa.literal_column(f"'{status}'")}
+    if status == "CANCELED":
+        values["canceled_at"] = _NOW
+    return (
+        sa.update(Order)
+        .where(Order.id == order_id, Order.status == sa.literal_column(f"'{expect}'"))
+        .values(**values)
+        .returning(Order.id)
+    )
+
+
+def claim_order_items(
+    *, order_id: int, schedule_id: int, user_id: int, seat_ids: Sequence[int]
+) -> sa.Insert:
+    """확정의 두 번째 문장 — 좌석을 이 주문에 붙인다 (확정 트랜잭션).
+
+    조건이 만료된 hold 를 걸러낸다. 승인 왕복 중에 hold 가 만료됐다면 여기서
+    행이 모자라고, 그때는 커밋하지 않고 환불해야 한다 — 만료된 hold 로 확정하면
+    이미 남에게 팔릴 수 있었던 좌석을 뒤늦게 가져가는 것이 된다.
+
+    ON CONFLICT 를 쓰지 않는다. order_items.schedule_seat_id 의 UNIQUE 위반은
+    멱등성 3겹의 최후 방어선이고, 그 예외가 올라와야 롤백 후 환불로 이어진다.
+    조용히 무시하면 이중 판매가 조용히 성공한다.
+    """
+    source = (
+        sa.select(
+            sa.literal(order_id, sa.BigInteger), ScheduleSeat.id, ScheduleSeat.price
+        )
+        .where(
+            ScheduleSeat.schedule_id == schedule_id,
+            ScheduleSeat.seat_id == sa.any_(_bigint_array(seat_ids)),
+            ScheduleSeat.status == _HELD,
+            ScheduleSeat.held_by == user_id,
+            ScheduleSeat.hold_expires_at > _NOW,
+        )
+        .order_by(ScheduleSeat.seat_id)
+    )
+    return (
+        sa.insert(OrderItem)
+        .from_select(["order_id", "schedule_seat_id", "price"], source)
+        .returning(OrderItem.schedule_seat_id)
+    )
+
+
+def book_order_seats(*, order_id: int) -> sa.Update:
+    """확정의 세 번째 문장 — 좌석을 BOOKED 로.
+
+    hold 메타데이터를 반드시 비운다. ck_schedule_seats_hold_shape 가
+    "HELD 가 아니면 held_by 와 hold_expires_at 은 NULL" 을 요구하므로,
+    빠뜨리면 DB 가 행을 거부한다 — 제약이 이 실수를 대신 잡아준다.
+    """
+    mine = sa.select(OrderItem.schedule_seat_id).where(OrderItem.order_id == order_id)
+    return (
+        sa.update(ScheduleSeat)
+        .where(ScheduleSeat.id.in_(mine), ScheduleSeat.status == _HELD)
+        .values(
+            status=_BOOKED, held_by=None, hold_expires_at=None, updated_at=_NOW
+        )
+        .returning(ScheduleSeat.seat_id)
+    )
+
+
+def restore_order_seats(*, order_id: int) -> sa.Update:
+    """취소 확정 후 좌석 복원 (취소와 환불).
+
+    환불 성공을 확인한 뒤에만 부른다. 순서를 뒤집으면 환불이 실패했는데 좌석은
+    이미 남에게 팔려 되돌릴 수 없다.
+    """
+    mine = sa.select(OrderItem.schedule_seat_id).where(OrderItem.order_id == order_id)
+    return (
+        sa.update(ScheduleSeat)
+        .where(ScheduleSeat.id.in_(mine), ScheduleSeat.status == _BOOKED)
+        .values(status=_AVAILABLE, updated_at=_NOW)
+        .returning(ScheduleSeat.seat_id)
+    )
+
+
+def insert_outbox(*, topic: str, payload: dict[str, Any]) -> sa.Insert:
+    """확정 트랜잭션과 같이 커밋된다 (확정 트랜잭션).
+
+    "좌석은 잡혔는데 알림톡이 안 갔다"가 원천적으로 생기지 않는다. 발행은
+    별도 워커가 published_at 이 NULL 인 행을 훑어서 한다.
+    """
+    return sa.insert(Outbox).values(topic=topic, payload=payload).returning(Outbox.id)
+
+
+def insert_payment(
+    *,
+    order_id: int,
+    status: str,
+    amount: int,
+    pg_tid: str | None = None,
+    fee_snapshot: dict[str, Any] | None = None,
+) -> sa.Insert:
+    """결제 시도 기록. 실패한 시도도 남긴다 — 정산 분쟁의 유일한 근거다.
+
+    status 는 pay_status ENUM 값이다: REQUESTED · APPROVED · FAILED · REFUNDED.
+    """
+    if status not in _PAY_STATUSES:
+        raise ValueError(f"pay_status 값이 아니다: {status!r}")
+    values: dict[str, Any] = {
+        "order_id": order_id,
+        "status": sa.literal_column(f"'{status}'"),
+        "amount": amount,
+        "pg_tid": pg_tid,
+        "fee_snapshot": fee_snapshot,
+    }
+    if status == "APPROVED":
+        values["approved_at"] = _NOW
+    elif status == "REFUNDED":
+        values["refunded_at"] = _NOW
+    return sa.insert(Payment).values(**values).returning(Payment.id)
+
+
+def approved_payment(*, order_id: int) -> sa.Select[Any]:
+    """이 주문의 승인된 결제. 환불 요청의 대상(pg_tid)을 여기서 얻는다."""
+    return (
+        sa.select(Payment.id, Payment.pg_tid, Payment.amount)
+        .where(Payment.order_id == order_id, Payment.status == _APPROVED)
+        .order_by(Payment.id.desc())
+        .limit(1)
+    )
+
+
+def promote_payment_to_approved(*, order_id: int, pg_tid: str) -> sa.Update:
+    """REQUESTED 시도를 승인으로 올린다.
+
+    조건부 전이다. 웹훅과 리컨실러가 같은 주문을 동시에 확정하려 하면 한쪽만
+    0행을 받는다 — 그쪽은 결제 행을 새로 만들지 않고 넘어가야 한다.
+    같은 pg_tid 로 두 행을 만들면 payments.pg_tid UNIQUE 가 거부한다.
+    """
+    return (
+        sa.update(Payment)
+        .where(Payment.order_id == order_id, Payment.status == _REQUESTED)
+        .values(status=_APPROVED, pg_tid=pg_tid, approved_at=_NOW)
+        .returning(Payment.id)
+    )
+
+
+def fail_pending_payments(*, order_id: int) -> sa.Update:
+    """결론이 난 주문의 남은 REQUESTED 시도를 실패로 닫는다.
+
+    남겨두면 리컨실러 입장에서 "승인 요청은 있는데 결론이 없는" 행이 영원히
+    남는다. 지우지 않고 FAILED 로 닫는 것은 시도 이력을 정산 근거로 쓰기 때문이다.
+    """
+    return (
+        sa.update(Payment)
+        .where(Payment.order_id == order_id, Payment.status == _REQUESTED)
+        .values(status=_FAILED)
+        .returning(Payment.id)
+    )
+
+
+def unresolved_orders(*, older_than_sec: float, batch: int) -> sa.Select[Any]:
+    """리컨실러가 되물을 주문 (배치 워커).
+
+    ix_orders_pending 부분 인덱스를 탄다 — status 를 리터럴로 박은 이유가 그것이다.
+
+    FOR UPDATE SKIP LOCKED 로 워커 여러 대가 같은 주문을 잡지 않게 한다.
+    같은 주문을 둘이 확정하려 해도 조건부 전이 때문에 결과는 맞지만, PG사에
+    두 번 되묻는 것은 그냥 낭비다.
+    """
+    return (
+        sa.select(Order.id)
+        .where(
+            Order.status == _PENDING,
+            Order.created_at < _NOW - _seconds(int(older_than_sec)),
+        )
+        .order_by(Order.created_at)
+        .limit(batch)
+        .with_for_update(skip_locked=True)
     )

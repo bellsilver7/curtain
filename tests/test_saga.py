@@ -279,6 +279,56 @@ async def test_pg_timeout_and_not_approved(engine, seeded: Seeded) -> None:
     assert approved == [], f"미승인인데 승인된 결제가 남아 있다: {approved}"
 
 
+async def test_reconciler_waits_when_pg_also_cannot_answer(
+    engine, seeded: Seeded
+) -> None:
+    """되물어도 모르면 아무것도 하지 않는다 — 다음 tick 에 다시 묻는다.
+
+    PG사 자체 장애로 inquire() 마저 UNKNOWN 인 경우다. 여기서 결론을 내리는
+    구현은 두 가지로 틀릴 수 있다. 승인으로 보면 안 받은 돈으로 좌석을 주고,
+    미승인으로 보면 받은 돈에 좌석을 안 준다. 둘 다 되돌리기 어렵다.
+
+    이 분기는 사보타주로 발견했다. 원래 FakePG 의 inquire() 는 장부를 직접 봐서
+    항상 결론을 냈고, 그래서 이 가드를 지워도 여섯 테스트가 모두 초록이었다 —
+    설계에서 가장 중요한 방어선이 아무 테스트도 없이 서 있었던 것이다.
+    """
+    orders = _orders()
+    seat_ids = await _hold(engine, seeded, user_index=6)
+    gateway = _fake_pg(lose_response=True, inquire_outcome=_result().UNKNOWN)
+
+    with pytest.raises(orders.PaymentUnknown) as caught:
+        await orders.place(
+            engine,
+            gateway,
+            schedule_id=seeded.schedule_id,
+            user_id=seeded.user_ids[6],
+            seat_ids=seat_ids,
+            idempotency_key="k-pg-also-unknown",
+        )
+    order_id = caught.value.order_id
+
+    confirmed = await orders.reconcile(engine, gateway, older_than=timedelta(0))
+
+    assert confirmed == [], f"모르는데 확정했다: {confirmed}"
+    assert await _order_status(engine, order_id) == "PENDING", (
+        "되물어도 모르는 주문에 결론을 내렸다. 승인으로 보면 안 받은 돈으로 "
+        "좌석을 주고, 미승인으로 보면 받은 돈에 좌석을 안 준다"
+    )
+    assert await _seat_status(engine, seeded.schedule_id, seat_ids[0]) == "HELD"
+    assert gateway.calls["inquire"] == 1, "되묻지 않았다"
+
+    # ── 다음 tick. PG사가 정신을 차리면 그때 확정된다 ──
+    gateway.inquire_outcome = None
+    confirmed = await orders.reconcile(engine, gateway, older_than=timedelta(0))
+
+    assert confirmed == [order_id], (
+        f"PG사가 답할 수 있게 됐는데도 확정하지 않았다: {confirmed}. "
+        f"주문이 PENDING 으로 영원히 남으면 좌석도 돈도 묶인다"
+    )
+    assert await _order_status(engine, order_id) == "PAID"
+    assert await _seat_status(engine, seeded.schedule_id, seat_ids[0]) == "BOOKED"
+
+
 # ─────────────────────────────────────────────────────── 멱등성 세 겹
 
 
@@ -324,6 +374,21 @@ async def test_idempotency_key_replay(engine, seeded: Seeded) -> None:
     assert (await _outbox_topics(engine)).count("order.paid") == 1, (
         "outbox 에 order.paid 가 여러 건이다. 알림이 중복 발송된다"
     )
+
+    # ── 원본이 끝난 뒤에 도착한 중복 ────────────────────────────
+    #
+    # 동시 5회만 보면 이 경로를 놓친다. 늦게 도착한 재시도는 좌석이 이미 BOOKED
+    # 라서 "유효한 hold 0석"을 보게 되는데, 그것을 실패로 답하면 성공한 주문의
+    # 재시도에 실패를 돌려주는 것이 된다. 실제로 위의 동시 5회가 간헐적으로
+    # 이렇게 깨져서 발견한 경로다 — 멱등키 조회가 hold 검증보다 먼저여야 한다.
+    late = await _place()
+
+    assert late.order_id == order_id
+    assert late.snapshot == snapshots[0], (
+        f"늦게 도착한 재시도의 응답이 원본과 다르다.\n{late.snapshot}\n{snapshots[0]}"
+    )
+    assert late.replayed is True
+    assert await _item_count(engine, order_id) == 2, "재시도가 좌석을 다시 확정했다"
 
 
 async def test_duplicate_webhook(engine, seeded: Seeded) -> None:
@@ -371,6 +436,94 @@ async def test_duplicate_webhook(engine, seeded: Seeded) -> None:
     assert await _order_status(engine, order_id) == "PAID"
 
 
+async def test_order_without_a_hold_never_reaches_pg(engine, seeded: Seeded) -> None:
+    """hold 가 없으면 PG 를 부르지 않는다.
+
+    승인 요청은 돈이 움직이는 외부 호출이다. 좌석을 줄 수 없다는 것이 이미
+    확실한 요청으로 PG 를 부르면, 그 승인은 전부 환불 대상이 된다.
+    """
+    orders = _orders()
+    gateway = _fake_pg()
+
+    with pytest.raises(orders.HoldExpired):
+        await orders.place(
+            engine,
+            gateway,
+            schedule_id=seeded.schedule_id,
+            user_id=seeded.user_ids[7],
+            seat_ids=[seeded.seat_ids[0]],
+            idempotency_key="k-no-hold",
+        )
+
+    assert gateway.calls["approve"] == 0, (
+        "hold 도 없는 요청으로 PG 를 불렀다. 승인되면 전부 환불해야 한다"
+    )
+    rows = await _rows(engine, "SELECT count(*) FROM orders")
+    assert int(rows[0][0]) == 0, "주문 행이 만들어졌다"
+
+
+async def test_cannot_order_someone_elses_hold(engine, seeded: Seeded) -> None:
+    """남이 잡고 있는 좌석은 주문할 수 없다.
+
+    hold 는 있고 유효하고 전량이지만 **내 것이 아니다.** 소유자 조건이 없으면
+    이 요청이 통과하고, 그러면 좌석을 잡은 사람과 결제한 사람이 갈린다.
+
+    사보타주로 찾은 구멍이다. 처음에는 "hold 가 아무것도 없는" 테스트로 소유자
+    조건을 지키려 했는데, 잡은 사람이 없으면 조건을 지워도 결과가 같아서
+    아무것도 증명하지 못했다.
+    """
+    orders = _orders()
+    gateway = _fake_pg()
+    seat_ids = await _hold(engine, seeded, user_index=9)  # 9번이 잡는다
+
+    with pytest.raises(orders.HoldExpired):
+        await orders.place(
+            engine,
+            gateway,
+            schedule_id=seeded.schedule_id,
+            user_id=seeded.user_ids[10],  # 10번이 산다
+            seat_ids=seat_ids,
+            idempotency_key="k-not-my-hold",
+        )
+
+    assert gateway.calls["approve"] == 0, "남의 좌석으로 PG 를 불렀다"
+    rows = await _rows(
+        engine, "SELECT held_by FROM schedule_seats WHERE schedule_id=:s AND seat_id=:t",
+        s=seeded.schedule_id, t=seat_ids[0],
+    )
+    assert int(rows[0][0]) == seeded.user_ids[9], "좌석 소유자가 바뀌었다"
+
+
+async def test_short_hold_is_rejected_before_pg(engine, seeded: Seeded) -> None:
+    """hold 잔여가 정책 미만이면 승인 요청 자체를 거절한다 (정책 상수).
+
+    승인 왕복 중에 hold 가 만료되는 창을 좁히는 장치다. 창에 빠졌을 때의 보상은
+    test_hold_expired_during_approval 이 보고, 여기서는 창을 좁히는 쪽을 본다.
+    """
+    orders = _orders()
+    gateway = _fake_pg()
+    # 잔여 1초. 정책은 60초를 요구한다.
+    seat_ids = await _hold(engine, seeded, user_index=8, ttl_sec=1)
+
+    with pytest.raises(orders.HoldExpired) as caught:
+        await orders.place(
+            engine,
+            gateway,
+            schedule_id=seeded.schedule_id,
+            user_id=seeded.user_ids[8],
+            seat_ids=seat_ids,
+            idempotency_key="k-short-hold",
+        )
+
+    assert "잔여" in str(caught.value), (
+        f"거절 사유가 잔여 부족임을 알려주지 않는다: {caught.value}"
+    )
+    assert gateway.calls["approve"] == 0, "잔여가 모자란데 PG 를 불렀다"
+    assert await _seat_status(engine, seeded.schedule_id, seat_ids[0]) == "HELD", (
+        "거절하면서 좌석까지 놓아버렸다. 사용자는 아직 그 좌석을 잡고 있다"
+    )
+
+
 # ────────────────────────────────────────────── hold 만료와 취소 순서
 
 
@@ -385,10 +538,14 @@ async def test_hold_expired_during_approval(engine, seeded: Seeded) -> None:
     없고 돈도 없다.
     """
     orders = _orders()
-    # hold 를 1초만 준다. 승인 지연 0.3초 × 4 를 못 버틴다.
+    # hold 를 1초만 주고 승인에 1.5초를 끈다. 승인이 돌아왔을 때 hold 는 이미 없다.
     seat_ids = await _hold(engine, seeded, user_index=4, ttl_sec=1)
     gateway = _fake_pg(latency_sec=1.5)
 
+    # 사전 검사를 끈다. 평소에는 hold 잔여가 60초 미만이면 PG 를 부르기도 전에
+    # 거절하는데(정책 상수 MIN_HOLD_REMAINING_FOR_PAYMENT), 그 창을 좁히는 장치가
+    # 있다는 것과 창이 아예 없다는 것은 다르다. 여기서 검증하는 것은 창에 빠졌을
+    # 때의 보상이므로 사전 검사를 통과시켜야 한다.
     with pytest.raises(orders.HoldExpired) as caught:
         await orders.place(
             engine,
@@ -397,6 +554,7 @@ async def test_hold_expired_during_approval(engine, seeded: Seeded) -> None:
             user_id=seeded.user_ids[4],
             seat_ids=seat_ids,
             idempotency_key="k-hold-expired",
+            min_hold_remaining=timedelta(0),
         )
     order_id = caught.value.order_id
 

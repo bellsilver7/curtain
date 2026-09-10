@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from app.domain import policy, seat
+from app.domain import order, payment, policy, seat
 
 
 def test_policy_doctests() -> None:
@@ -70,8 +70,54 @@ def test_cancel_closed_on_show_day() -> None:
         policy.cancel_fee(100_000, now, now + timedelta(hours=9))
 
 
-# TODO(3주차): app/domain/order.py 의 사가 전이 가드 검증
-#              (전이 표 검증은 test_transition_table_matches_design 에서 이미 한다)
+def test_order_doctests() -> None:
+    """주문 전이 규칙의 예시가 실제로 맞는지."""
+    result = doctest.testmod(order, verbose=False)
+    assert result.failed == 0, f"{result.failed} doctest(s) failed"
+
+
+def test_payment_doctests() -> None:
+    """결제 결과 어휘의 예시가 실제로 맞는지."""
+    result = doctest.testmod(payment, verbose=False)
+    assert result.failed == 0, f"{result.failed} doctest(s) failed"
+
+
+def test_order_transition_table_matches_design() -> None:
+    """주문 전이 표 전체를 코드로 고정한다 (결제 사가).
+
+    이 표가 곧 멱등성의 정의다. 확정이 PENDING → PAID 뿐이어야 두 번째 확정이
+    0행을 갱신하고 조용히 끝난다 — 허용 목록이 넓어지는 변경은 반드시 이 테스트를
+    깨야 한다.
+    """
+    st = order.OrderStatus
+    allowed = {(src, dst) for src, dsts in order.ALLOWED.items() for dst in dsts}
+    assert allowed == {
+        (st.PENDING, st.PAID),      # 승인 확인 (동기 응답 · 웹훅 · 리컨실러)
+        (st.PENDING, st.FAILED),    # 승인 거절, 또는 승인 후 좌석 불가 → 환불
+        (st.PENDING, st.CANCELED),  # 되물어보니 미승인
+        (st.PAID, st.CANCELED),     # 사용자 취소 (환불 성공 확인 후)
+    }
+
+
+def test_paid_order_cannot_fail() -> None:
+    """확정된 주문은 실패로 갈 수 없다.
+
+    PAID → FAILED 를 허용하면 "결제는 됐는데 실패로 닫힌" 주문이 생기고,
+    그 주문의 돈이 어디 있는지 아무 기록도 남지 않는다.
+    """
+    assert not order.can_transition(order.OrderStatus.PAID, order.OrderStatus.FAILED)
+    assert order.is_terminal(order.OrderStatus.CANCELED)
+    assert order.is_terminal(order.OrderStatus.FAILED)
+
+
+def test_unknown_is_the_only_inconclusive_result() -> None:
+    """무응답만 결론이 아니다 (원칙 "외부 호출은 리컨실러가 받친다").
+
+    이 성질이 깨지면 — 예를 들어 UNKNOWN 이 결론으로 취급되면 — 호출부가
+    무응답에서 바로 취소하게 되고, 실제로 승인됐던 결제가 좌석 없이 남는다.
+    """
+    inconclusive = {r for r in payment.PayResult if not r.is_conclusive}
+    assert inconclusive == {payment.PayResult.UNKNOWN}
 
 
 def test_seatmap_cache_ttl_is_short_enough() -> None:

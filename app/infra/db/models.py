@@ -26,7 +26,7 @@ from __future__ import annotations
 from datetime import datetime
 
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # 이름 없는 제약은 DB마다 다른 이름을 갖게 되고, 그때부터 마이그레이션이
@@ -150,6 +150,14 @@ class Order(Base):
     user_id: Mapped[int] = mapped_column(sa.ForeignKey("users.id"), nullable=False)
     schedule_id: Mapped[int] = mapped_column(sa.ForeignKey("schedules.id"), nullable=False)
     status: Mapped[str] = mapped_column(OrderStatus, nullable=False, server_default="PENDING")
+    #: 이 주문이 사려는 좌석. order_items 와 중복이 아니다 — 이쪽은 PENDING 시점의
+    #: "의도"이고, order_items 는 확정 시점의 "실제로 받은 것"이다. 그 둘이 갈릴 수
+    #: 있다는 사실이 사가의 전부다 (승인 왕복 중 hold 만료, 이중 판매).
+    #:
+    #: 이 컬럼이 없으면 웹훅과 리컨실러가 무엇을 확정해야 하는지 알 수 없고,
+    #: "그 유저가 이 회차에 잡고 있는 좌석"으로 추측하게 된다. 같은 유저의 다른
+    #: 주문 시도가 섞이는 순간 틀린 좌석을 확정한다.
+    seat_ids: Mapped[list[int]] = mapped_column(ARRAY(sa.BigInteger), nullable=False)
     total_amount: Mapped[int] = mapped_column(sa.Integer, nullable=False)
     booking_fee: Mapped[int] = mapped_column(sa.Integer, nullable=False, server_default="0")
     #: 멱등성 1겹 (멱등성). 같은 키로 몇 번 눌러도 주문은 하나다.
