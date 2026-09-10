@@ -70,6 +70,24 @@ ORM 세션은 쓰지 않는다. 모델(`app/infra/db/models.py`)은 스키마 �
   `SKIP LOCKED`, `guard` 절이 사라지는 변경은 반드시 빨개져야 한다.
   새 쿼리를 추가하면 `_every_statement()` 목록에도 넣는다.
 
+## 유스케이스 결과는 DTO 로 돌려준다
+
+서비스는 ORM 모델도 `Row` 도 계층 밖으로 흘리지 않는다. frozen dataclass 를
+돌려준다 — 불변이고 값으로 비교되며, 스키마가 바뀌어도 호출부가 안 깨진다.
+쓰기 모델(`models.py`)과 읽기 모델이 다른 모양인 것은 정상이다.
+
+이름 규칙:
+
+- 결과는 **받는 것을 가리키는 명사**: `Hold`, `Seatmap`, `PlacedOrder`, `CanceledOrder`
+- 그 원소는 단수 명사: `HeldSeat`, `SeatCell`
+- 입력·설정은 `-Spec`: `RowSpec`, `VenueLayout`
+- `-View` 는 쓰지 않는다. SQL view 와 웹 프레임워크의 view 와 겹쳐서, 무엇을
+  가리키는지 읽는 사람이 매번 되짚어야 한다
+
+DTO 에는 행동이 없다. 행동이 있으면 DTO 가 아니다 — `redis/client.Gate` 는
+`keep()` 을 갖고 가변이므로 DTO 가 아니라 핸들이고, 그래서 다른 계층으로
+넘기지 않는다.
+
 ## 마이그레이션
 
 `alembic revision --autogenerate` 로 뽑고 **반드시 읽는다.** ENUM 값 추가와

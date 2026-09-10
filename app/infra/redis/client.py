@@ -126,7 +126,11 @@ _bundles: dict[tuple[str, int], _Bundle] = {}
 
 @dataclass(slots=True)
 class Gate:
-    """게이트 획득 결과. 블록을 벗어날 때 keep() 안 했으면 반납된다."""
+    """게이트 획득 결과. 블록을 벗어날 때 keep() 안 했으면 반납된다.
+
+    이것은 DTO 가 아니다. keep() 이라는 행동이 있고 가변이므로, 계층 사이를
+    넘겨 다니는 값이 아니라 컨텍스트 매니저가 빌려주는 핸들이다.
+    """
 
     acquired: bool
     #: 게이트가 알려준 막힌 좌석. DB 를 다시 조회하지 않고 이 값을 응답에 쓴다.

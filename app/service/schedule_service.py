@@ -15,8 +15,12 @@ from app.infra.db import queries
 
 
 @dataclass(frozen=True, slots=True)
-class SeatRow:
-    """한 열(row)의 정의. 실제 공연장은 열마다 폭이 다르다."""
+class RowSpec:
+    """공연장 열 하나의 정의 — 좌석 전개의 **입력**이다.
+
+    실제 공연장은 열마다 폭이 다르다. 이름이 -Spec 인 것은 입력임을 드러내려는
+    것이고, 결과 DTO(Seatmap, SeatCell 등)와 반대 방향의 값이다.
+    """
 
     zone: str
     row_label: str
@@ -27,9 +31,11 @@ class SeatRow:
 
 @dataclass(frozen=True, slots=True)
 class VenueLayout:
+    """공연장 하나의 좌석 배치 — 입력. RowSpec 여럿을 묶은다."""
+
     name: str
     address: str
-    rows: tuple[SeatRow, ...]
+    rows: tuple[RowSpec, ...]
 
     @property
     def total_seats(self) -> int:
@@ -42,8 +48,8 @@ class VenueLayout:
         return out
 
 
-def _rows(zone: str, labels: str, width: int, grade: str, price: int) -> list[SeatRow]:
-    return [SeatRow(zone, ch, width, grade, price) for ch in labels]
+def _rows(zone: str, labels: str, width: int, grade: str, price: int) -> list[RowSpec]:
+    return [RowSpec(zone, ch, width, grade, price) for ch in labels]
 
 
 #: 설계 문서가 가정하는 1,200석 공연장: VIP 120 / R 380 / S 700.

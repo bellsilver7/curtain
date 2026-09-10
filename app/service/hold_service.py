@@ -42,6 +42,8 @@ class QuotaExceeded(HoldRejected):
 
 @dataclass(frozen=True, slots=True)
 class HeldSeat:
+    """선점된 좌석 하나 — 결과 DTO 의 원소."""
+
     seat_id: int
     grade: str
     price: int
@@ -49,6 +51,8 @@ class HeldSeat:
 
 @dataclass(frozen=True, slots=True)
 class Hold:
+    """선점 결과. acquire() 가 돌려주는 값이다."""
+
     schedule_id: int
     user_id: int
     seats: tuple[HeldSeat, ...]

@@ -24,7 +24,7 @@ from app.domain.payment import PayResult
 
 @dataclass(frozen=True, slots=True)
 class PayAttempt:
-    """한 번의 시도 결과.
+    """한 번의 시도 결과 — 어댑터의 결과 DTO.
 
     pg_tid 는 결과가 APPROVED 일 때만 의미가 있다. 그것이 웹훅 중복 판정 키이고
     환불 요청의 대상이다 (멱등성 세 겹).

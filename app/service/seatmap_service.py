@@ -43,8 +43,12 @@ def _cache_key(schedule_id: int) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class SeatView:
-    """좌석 하나. 클라이언트가 그대로 그릴 수 있는 형태다."""
+class SeatCell:
+    """좌석맵의 한 칸 — 읽기 모델의 원소.
+
+    클라이언트가 그대로 그릴 수 있는 형태다. models.ScheduleSeat(쓰기 모델)와
+    다른 모양인 것이 요점이다 — 두 테이블을 조인하고 라벨까지 조립한 값이다.
+    """
 
     seat_id: int
     #: 사람이 읽는 좌석 이름. 서버가 만든다 — 좌석 번호 규칙이 공연장마다
@@ -57,10 +61,17 @@ class SeatView:
 
 @dataclass(frozen=True, slots=True)
 class Seatmap:
+    """좌석맵 조회의 응답 봉투.
+
+    데이터(seats)와 응답 메타(etag, from_cache)를 같이 담는다. 엄밀히는 순수한
+    읽기 모델이 아니지만 의도한 것이다 — etag 는 내용이 있는 자리에서 계산해야
+    결정적이고, HTTP 계층은 (etag, seats)를 한 번에 받아야 304 를 판정할 수 있다.
+    """
+
     schedule_id: int
     #: 같은 내용이면 같은 값. HTTP 계층이 304 를 판정하는 근거다.
     etag: str
-    seats: tuple[SeatView, ...]
+    seats: tuple[SeatCell, ...]
     #: 캐시에서 답했는가. 정확성과는 무관하고 관측용이다.
     from_cache: bool
 
@@ -79,9 +90,9 @@ def _etag(schedule_id: int, rows: Sequence[Sequence[Any]]) -> str:
     return blake2b(material.encode("utf-8"), digest_size=12).hexdigest()
 
 
-def _to_seats(rows: Sequence[Sequence[Any]]) -> tuple[SeatView, ...]:
+def _to_seats(rows: Sequence[Sequence[Any]]) -> tuple[SeatCell, ...]:
     return tuple(
-        SeatView(
+        SeatCell(
             seat_id=int(seat_id),
             label=_label(zone, row_label, int(col_no)),
             grade=grade,

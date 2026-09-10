@@ -52,7 +52,7 @@ def _service() -> Any:
             "\n"
             "    async def get(engine, *, schedule_id: int) -> Seatmap\n"
             "\n"
-            "    class SeatView:   seat_id, label, grade, price, status\n"
+            "    class SeatCell:   seat_id, label, grade, price, status\n"
             "    class Seatmap:    schedule_id, etag, seats, from_cache\n"
             "\n"
             "  - label 은 '1층 C열 12번' 형식 (zone/row_label/col_no 조합)\n"

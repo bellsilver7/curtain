@@ -90,8 +90,12 @@ class RefundFailed(OrderRejected):
 
 
 @dataclass(frozen=True, slots=True)
-class Placed:
-    """주문 결과. snapshot 이 HTTP 응답 본문이 된다."""
+class PlacedOrder:
+    """주문 결과. snapshot 이 HTTP 응답 본문이 된다.
+
+    snapshot 을 따로 들고 있는 이유는 멱등성이다 — 같은 키의 재시도에 최초
+    응답을 그대로 재생해야 하므로, 그 값이 DB 에 저장된 형태 그대로여야 한다.
+    """
 
     order_id: int
     status: str
@@ -101,7 +105,9 @@ class Placed:
 
 
 @dataclass(frozen=True, slots=True)
-class Canceled:
+class CanceledOrder:
+    """취소 결과. cancel() 이 돌려주는 값이다."""
+
     order_id: int
     #: 취소 수수료(원). policy.cancel_fee() 의 결과이며 payments 에 스냅샷으로 남는다.
     fee: int
@@ -223,7 +229,7 @@ async def place(
     seat_ids: list[int],
     idempotency_key: str,
     min_hold_remaining: timedelta = policy.MIN_HOLD_REMAINING_FOR_PAYMENT,
-) -> Placed:
+) -> PlacedOrder:
     """주문 생성 + 결제 승인. 사가의 시작점 (설계 문서: API 스펙 POST /orders).
 
     min_hold_remaining 을 인자로 받는 이유는 테스트다. 기본값은 정책 상수이고,
@@ -367,7 +373,7 @@ async def cancel(
     *,
     order_id: int,
     now: datetime | None = None,
-) -> Canceled:
+) -> CanceledOrder:
     """취소. **환불 성공을 확인한 뒤에** 좌석을 복원한다 (취소와 환불).
 
     순서를 뒤집으면 환불이 실패했는데 좌석은 이미 남에게 팔려 되돌릴 수 없다.
@@ -418,7 +424,7 @@ async def cancel(
         ).first()
         if closed is None:
             # 다른 경로가 먼저 취소했다. 환불은 이미 났으므로 기록만 남긴다.
-            return Canceled(order_id=order_id, fee=fee, refunded=True)
+            return CanceledOrder(order_id=order_id, fee=fee, refunded=True)
 
         await conn.execute(
             queries.insert_payment(
@@ -437,7 +443,7 @@ async def cancel(
             )
         )
 
-    return Canceled(order_id=order_id, fee=fee, refunded=True)
+    return CanceledOrder(order_id=order_id, fee=fee, refunded=True)
 
 
 # ─────────────────────────────────────────────────────────── 내부 헬퍼
@@ -517,7 +523,7 @@ class _Order:
             setattr(self, name, row[name])
 
 
-async def _placed(engine: AsyncEngine, *, order_id: int, replayed: bool) -> Placed:
+async def _placed(engine: AsyncEngine, *, order_id: int, replayed: bool) -> PlacedOrder:
     """저장된 응답 스냅샷을 돌려준다. 없으면 잠깐 기다린다.
 
     원본 요청이 아직 PG 왕복 중이면 스냅샷이 없다. 이때 새 스냅샷을 만들면
@@ -529,7 +535,7 @@ async def _placed(engine: AsyncEngine, *, order_id: int, replayed: bool) -> Plac
                 await conn.execute(queries.order_for_saga(order_id=order_id))
             ).mappings().one()
         if row["response_snapshot"] is not None:
-            return Placed(
+            return PlacedOrder(
                 order_id=order_id,
                 status=str(row["status"]),
                 snapshot=dict(row["response_snapshot"]),
@@ -647,13 +653,13 @@ def _utcnow() -> datetime:
 
 
 __all__ = [
-    "Canceled",
+    "CanceledOrder",
     "HoldExpired",
     "OrderRejected",
     "PaymentDeclined",
     "PaymentInProgress",
     "PaymentUnknown",
-    "Placed",
+    "PlacedOrder",
     "RefundFailed",
     "cancel",
     "confirm_paid",
