@@ -23,7 +23,6 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass
 from hashlib import blake2b
 from typing import Any
 
@@ -32,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.domain import policy
 from app.infra.db import queries
 from app.infra.redis import client as redis_client
+from app.service.dto import SeatCell, Seatmap
 
 #: 캐시 키. 뒤의 버전 태그는 직렬화 형식을 바꿀 때 올린다 — 배포 중에 예전
 #: 형식이 남아 있어도 새 코드가 그것을 읽으려 하지 않게.
@@ -40,40 +40,6 @@ _CACHE_VERSION = "v1"
 
 def _cache_key(schedule_id: int) -> str:
     return f"seatmap:{{{schedule_id}}}:{_CACHE_VERSION}"
-
-
-@dataclass(frozen=True, slots=True)
-class SeatCell:
-    """좌석맵의 한 칸 — 읽기 모델의 원소.
-
-    클라이언트가 그대로 그릴 수 있는 형태다. models.ScheduleSeat(쓰기 모델)와
-    다른 모양인 것이 요점이다 — 두 테이블을 조인하고 라벨까지 조립한 값이다.
-    """
-
-    seat_id: int
-    #: 사람이 읽는 좌석 이름. 서버가 만든다 — 좌석 번호 규칙이 공연장마다
-    #: 다르고, 클라이언트 세 곳에서 각자 조립하면 세 곳이 다르게 틀린다.
-    label: str
-    grade: str
-    price: int
-    status: str
-
-
-@dataclass(frozen=True, slots=True)
-class Seatmap:
-    """좌석맵 조회의 응답 봉투.
-
-    데이터(seats)와 응답 메타(etag, from_cache)를 같이 담는다. 엄밀히는 순수한
-    읽기 모델이 아니지만 의도한 것이다 — etag 는 내용이 있는 자리에서 계산해야
-    결정적이고, HTTP 계층은 (etag, seats)를 한 번에 받아야 304 를 판정할 수 있다.
-    """
-
-    schedule_id: int
-    #: 같은 내용이면 같은 값. HTTP 계층이 304 를 판정하는 근거다.
-    etag: str
-    seats: tuple[SeatCell, ...]
-    #: 캐시에서 답했는가. 정확성과는 무관하고 관측용이다.
-    from_cache: bool
 
 
 def _label(zone: str, row_label: str, col_no: int) -> str:

@@ -7,45 +7,10 @@ schedules × seats 를 미리 전개해 두면, 이후 모든 경합이 카운�
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.infra.db import queries
-
-
-@dataclass(frozen=True, slots=True)
-class RowSpec:
-    """공연장 열 하나의 정의 — 좌석 전개의 **입력**이다.
-
-    실제 공연장은 열마다 폭이 다르다. 이름이 -Spec 인 것은 입력임을 드러내려는
-    것이고, 결과 DTO(Seatmap, SeatCell 등)와 반대 방향의 값이다.
-    """
-
-    zone: str
-    row_label: str
-    width: int
-    grade: str
-    price: int
-
-
-@dataclass(frozen=True, slots=True)
-class VenueLayout:
-    """공연장 하나의 좌석 배치 — 입력. RowSpec 여럿을 묶은다."""
-
-    name: str
-    address: str
-    rows: tuple[RowSpec, ...]
-
-    @property
-    def total_seats(self) -> int:
-        return sum(r.width for r in self.rows)
-
-    def count_by_grade(self) -> dict[str, int]:
-        out: dict[str, int] = {}
-        for r in self.rows:
-            out[r.grade] = out.get(r.grade, 0) + r.width
-        return out
+from app.service.dto import RowSpec, VenueLayout
 
 
 def _rows(zone: str, labels: str, width: int, grade: str, price: int) -> list[RowSpec]:

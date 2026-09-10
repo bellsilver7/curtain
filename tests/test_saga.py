@@ -67,6 +67,7 @@ def _orders() -> Any:
             "\n"
             "    class PlacedOrder:    order_id, status, snapshot(dict)\n"
             "    class CanceledOrder:  order_id, fee, refunded(bool)\n"
+            "    (결과 DTO 는 app/service/dto.py 에 둔다)\n"
             "\n"
             "  - place() 는 트랜잭션을 여러 개 쓴다. 사가는 정의상 자기 트랜잭션\n"
             "    경계를 갖는다 — hold_service 와 달리 engine 을 받는다\n"

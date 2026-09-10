@@ -25,7 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from app.infra.db.engine import build_engine
 from app.infra.redis import client as gate_client
 from app.service import schedule_service
-from app.service.schedule_service import DEMO_HALL, VenueLayout
+from app.service.dto import VenueLayout
+from app.service.schedule_service import DEMO_HALL
 
 #: 동시성 테스트의 병렬도. 풀 크기는 이것보다 넉넉해야 한다.
 CONCURRENCY = int(os.getenv("TEST_CONCURRENCY", "200"))

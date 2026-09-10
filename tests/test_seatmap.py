@@ -54,6 +54,7 @@ def _service() -> Any:
             "\n"
             "    class SeatCell:   seat_id, label, grade, price, status\n"
             "    class Seatmap:    schedule_id, etag, seats, from_cache\n"
+            "    (결과 DTO 는 app/service/dto.py 에 둔다)\n"
             "\n"
             "  - label 은 '1층 C열 12번' 형식 (zone/row_label/col_no 조합)\n"
             "  - from_cache 는 관측용 불리언. 캐시에서 answered 되었는가\n"

@@ -18,7 +18,6 @@ PG 왕복을 트랜잭션 안에 넣으면 수백 ms 짜리 외부 호출이 DB 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -31,6 +30,7 @@ from app.domain.payment import PayResult
 from app.infra.db import queries
 from app.infra.db.engine import tx
 from app.infra.pg.base import PaymentGateway
+from app.service.dto import CanceledOrder, PlacedOrder
 
 #: 중복 요청이 원본의 응답 스냅샷을 기다리는 상한.
 #:
@@ -87,31 +87,6 @@ class RefundFailed(OrderRejected):
     """환불이 실패했다. 좌석은 복원하지 않는다 (취소와 환불 순서 규칙)."""
 
     code = "REFUND_FAILED"
-
-
-@dataclass(frozen=True, slots=True)
-class PlacedOrder:
-    """주문 결과. snapshot 이 HTTP 응답 본문이 된다.
-
-    snapshot 을 따로 들고 있는 이유는 멱등성이다 — 같은 키의 재시도에 최초
-    응답을 그대로 재생해야 하므로, 그 값이 DB 에 저장된 형태 그대로여야 한다.
-    """
-
-    order_id: int
-    status: str
-    snapshot: dict[str, Any]
-    #: 저장된 스냅샷을 재생한 것인가. 정확성과 무관하고 관측용이다.
-    replayed: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class CanceledOrder:
-    """취소 결과. cancel() 이 돌려주는 값이다."""
-
-    order_id: int
-    #: 취소 수수료(원). policy.cancel_fee() 의 결과이며 payments 에 스냅샷으로 남는다.
-    fee: int
-    refunded: bool
 
 
 # ─────────────────────────────────────────────────────────── 확정 (단일 경로)
@@ -652,14 +627,15 @@ def _utcnow() -> datetime:
     return datetime.now(UTC)
 
 
+#: 이 모듈이 소유한 이름만 적는다. 결과 DTO(PlacedOrder, CanceledOrder)는
+#: app/service/dto.py 것이므로 여기서 재수출하지 않는다 — 두 곳에서 import 할
+#: 수 있게 두면 어느 쪽이 정본인지 흐려진다.
 __all__ = [
-    "CanceledOrder",
     "HoldExpired",
     "OrderRejected",
     "PaymentDeclined",
     "PaymentInProgress",
     "PaymentUnknown",
-    "PlacedOrder",
     "RefundFailed",
     "cancel",
     "confirm_paid",

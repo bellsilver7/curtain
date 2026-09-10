@@ -12,14 +12,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
-
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.domain import policy
 from app.infra.db import queries
 from app.infra.redis import client as gate_client
+from app.service.dto import HeldSeat, Hold
 
 
 class HoldRejected(Exception):
@@ -38,29 +36,6 @@ class QuotaExceeded(HoldRejected):
     """회차당 구매 한도 초과 (정책 상수)."""
 
     code = "QUOTA_EXCEEDED"
-
-
-@dataclass(frozen=True, slots=True)
-class HeldSeat:
-    """선점된 좌석 하나 — 결과 DTO 의 원소."""
-
-    seat_id: int
-    grade: str
-    price: int
-
-
-@dataclass(frozen=True, slots=True)
-class Hold:
-    """선점 결과. acquire() 가 돌려주는 값이다."""
-
-    schedule_id: int
-    user_id: int
-    seats: tuple[HeldSeat, ...]
-    expires_at: datetime
-
-    @property
-    def total_amount(self) -> int:
-        return sum(s.price for s in self.seats)
 
 
 async def acquire(
